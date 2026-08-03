@@ -5,10 +5,11 @@
  * Lỗi nghiệp vụ nhận diện qua message prefix "CS_XXX: ..." — callOld đã parse thành GatewayError.
  * Body mirror docs 05 + contracts/types.ts (camelCase, id trong body, toàn POST).
  */
-import { callOld } from './oldApi';
+import { GatewayError } from '../gateway';
+import { baseUrl, callOld } from './oldApi';
 import type {
   ClientDataSource, ClientRowStatus, ClientSession, ClientSessionStatus,
-  ContactSuggestion, CreateSessionRequest, DataRow, DedupeConfig, RetryConfig,
+  ContactSuggestion, CreateSessionRequest, DataRow, DedupeConfig, ImportBatch, RetryConfig,
   SessionCounters, SipNumber, TimeSlot, UpdateSessionRequest, VariablePriority,
 } from '@/contracts/types';
 
@@ -159,3 +160,76 @@ export const mapContactSuggestion = (raw: { id?: string; name?: string; phones?:
   name: raw.name ?? 'Không xác định',
   phones: raw.phones ?? [],
 });
+
+/* ===================== Job nền (import/recheck/export) ===================== */
+
+export interface BeImportBatch {
+  id?: string;
+  _id?: string;
+  clientSessionId?: string;
+  type?: ImportBatch['type'];
+  source?: ClientDataSource;
+  status?: ImportBatch['status'];
+  totalRows?: number;
+  processedRows?: number;
+  inserted?: number;
+  duplicated?: number;
+  invalid?: number;
+  errorFileMinioKey?: string | null;
+  file?: { minioKey?: string; name?: string; size?: number } | null;
+  failReason?: string | null;
+  createdTimeMs?: number;
+  finishedTimeMs?: number | null;
+}
+
+export function mapImportBatch(dto: BeImportBatch): ImportBatch {
+  return {
+    // MongoEntity serialize `_id`; ClientSession có alias `id` còn ImportBatch thì chưa
+    id: dto.id ?? dto._id ?? '',
+    clientSessionId: dto.clientSessionId ?? '',
+    type: dto.type ?? 'IMPORT',
+    source: dto.source,
+    status: dto.status ?? 'RECEIVED',
+    totalRows: dto.totalRows ?? 0,
+    processedRows: dto.processedRows ?? 0,
+    inserted: dto.inserted ?? 0,
+    duplicated: dto.duplicated ?? 0,
+    invalid: dto.invalid ?? 0,
+    errorFileKey: dto.errorFileMinioKey ?? null,
+    fileKey: dto.file?.minioKey ?? null,
+    fileName: dto.file?.name ?? null,
+    failReason: dto.failReason ?? null,
+    createdTimeMs: dto.createdTimeMs,
+    finishedTimeMs: dto.finishedTimeMs ?? null,
+  };
+}
+
+/** Upload multipart — endpoint duy nhất không phải JSON, nên không đi qua callOld. */
+export async function csUpload<T>(path: string, form: FormData): Promise<T> {
+  const jwt = process.env.CALLBOT_JWT || '';
+  if (!jwt) {
+    throw new GatewayError('CS_UNAUTHORIZED', 'Chưa cấu hình CALLBOT_JWT trong .env');
+  }
+  const res = await fetch(`${baseUrl()}/client-session${path}`, {
+    method: 'POST',
+    headers: { Authorization: jwt.startsWith('Bearer ') ? jwt : `Bearer ${jwt}` }, // KHÔNG set Content-Type: fetch tự thêm boundary
+    body: form,
+    cache: 'no-store',
+  });
+  if (res.status === 401 || res.status === 403) {
+    throw new GatewayError('CS_UNAUTHORIZED', 'JWT hết hạn hoặc không hợp lệ');
+  }
+  const text = await res.text();
+  let envelope: { status_code?: number; statusCode?: number; message?: string; payload?: T };
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    throw new GatewayError('CS_BAD_GATEWAY', `Response không phải JSON (HTTP ${res.status}): ${text.slice(0, 120)}`);
+  }
+  if ((envelope.status_code ?? envelope.statusCode) !== 9999) {
+    const msg = envelope.message || 'Upload thất bại';
+    const prefixed = /^(CS_[A-Z_]+):\s*(.*)$/s.exec(msg);
+    throw prefixed ? new GatewayError(prefixed[1], prefixed[2] || msg) : new GatewayError('CS_UPSTREAM_ERROR', msg);
+  }
+  return envelope.payload as T;
+}

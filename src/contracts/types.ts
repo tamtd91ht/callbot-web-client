@@ -140,7 +140,7 @@ export interface ContactSuggestion {
   phones: string[];
 }
 
-/** Kết quả import Excel (BFF parse server-side). */
+/** Kết quả import Excel (mock: BFF parse tại chỗ; real: BE trả sau khi job nền chạy xong). */
 export interface ImportExcelResult {
   fileName: string;
   totalRows: number;
@@ -148,6 +148,59 @@ export interface ImportExcelResult {
   duplicated: number;
   invalid: number;
   errors: Array<{ row: number; reason: string }>;
+  /** Real mode: job chạy nền → theo dõi qua importBatchId, kết quả chưa có ngay. */
+  importBatchId?: string;
+  pending?: boolean;
+}
+
+export type ImportBatchType = 'IMPORT' | 'RECHECK' | 'EXPORT';
+export type ImportStatus = 'RECEIVED' | 'PROCESSING' | 'DONE' | 'FAILED';
+
+/** 1 đợt xử lý nền của phiên (nạp data / tính lại trùng / export) — docs 05 #19. */
+export interface ImportBatch {
+  id: string;
+  clientSessionId: string;
+  type?: ImportBatchType;
+  source?: ClientDataSource;
+  status: ImportStatus;
+  totalRows?: number;
+  processedRows?: number;
+  inserted?: number;
+  duplicated?: number;
+  invalid?: number;
+  /** Excel: file .xlsx chứa dòng lỗi/trùng + cột lý do. */
+  errorFileKey?: string | null;
+  /** Export: file kết quả. */
+  fileKey?: string | null;
+  fileName?: string | null;
+  failReason?: string | null;
+  createdTimeMs?: number;
+  finishedTimeMs?: number | null;
+}
+
+/** Filter danh bạ CRM khi nạp data nguồn CRM (B6). */
+export interface CrmContactFilter {
+  tagIds?: string[];
+  categoryIds?: string[];
+  businessIds?: string[];
+  userOwnerIds?: string[];
+  createdFromMs?: number;
+  createdToMs?: number;
+}
+
+/** Báo cáo 1 phiên (B9). */
+export interface SessionReport {
+  sessionId: string;
+  name?: string;
+  status?: ClientSessionStatus;
+  byRowStatus: Record<string, number>;
+  bySource: Record<string, number>;
+  byCallResult: Record<string, number>;
+  totalRows: number;
+  finishedCalls: number;
+  /** % nghe máy, đã làm tròn 2 chữ số ở BE. */
+  answerRate: number;
+  counters?: SessionCounters;
 }
 
 // ===== Envelope (BE dùng {code,message,data} — BFF giữ nguyên) =====

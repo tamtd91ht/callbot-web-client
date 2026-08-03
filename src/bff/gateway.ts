@@ -6,8 +6,8 @@
  * FE/route handlers KHÔNG được import mock/real trực tiếp — chỉ qua getGateway().
  */
 import type {
-  AppendMode, ClientSession, ContactSuggestion, CreateSessionRequest, DataRow,
-  ManualRowsRequest, UpdateSessionRequest,
+  AppendMode, ClientSession, ContactSuggestion, CreateSessionRequest, CrmContactFilter, DataRow,
+  ImportBatch, ImportExcelResult, ManualRowsRequest, SessionReport, UpdateSessionRequest,
 } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
 
@@ -33,6 +33,25 @@ export interface CallbotGateway {
   /** Autocomplete contact CRM cho drawer Thủ công (mock; real qua API contact). */
   searchContacts(query: string): Promise<ContactSuggestion[]>;
   setAppendMode(id: string, mode: AppendMode): Promise<void>;
+
+  // ===== Job nền + báo cáo (B5/B6/B7/B9/B10) =====
+  /**
+   * Real: đẩy nguyên file lên BE, parse chạy nền → trả `{importBatchId, pending:true}`.
+   * Mock: BFF tự parse tại chỗ nên trả kết quả đầy đủ ngay.
+   */
+  importExcel(id: string, file: File, appendMode?: AppendMode): Promise<ImportExcelResult>;
+  /** Số contact khớp filter — hỏi trước khi user chốt nạp. */
+  previewCrm(id: string, filter: CrmContactFilter): Promise<number>;
+  importCrm(id: string, filter: CrmContactFilter, appendMode?: AppendMode): Promise<ImportBatch>;
+  /** Các đợt xử lý nền của phiên — FE poll để hiện tiến độ / lấy link file. */
+  listImportBatches(id: string): Promise<ImportBatch[]>;
+  /** Tính lại trùng sau khi đổi cách check trùng (chỉ ở DRAFT). */
+  recheckDedupe(id: string): Promise<ImportBatch>;
+  updateRow(id: string, rowId: string, patch: { phoneNumber?: string; variables?: Record<string, string> }): Promise<DataRow>;
+  /** Ép 1 dòng DUPLICATE về STAGED — chấp nhận gọi cả hai dòng trùng. */
+  restoreDuplicate(id: string, rowId: string): Promise<DataRow>;
+  report(id: string): Promise<SessionReport>;
+  exportData(id: string, rowStatuses?: string[]): Promise<ImportBatch>;
   /** Đăng ký nhận realtime events của 1 phiên (mock: từ simulator; real: C-03 sẽ chuyển FE nối socket trực tiếp). */
   subscribe(id: string, listener: (e: SessionEvent) => void): () => void;
 }

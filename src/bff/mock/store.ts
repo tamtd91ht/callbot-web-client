@@ -2,12 +2,14 @@
  * In-memory store cho mock mode. Dùng globalThis để sống sót qua HMR của `next dev`
  * (mỗi lần hot-reload module bị nạp lại nhưng globalThis giữ nguyên).
  */
-import type { ClientSession, DataRow } from '@/contracts/types';
+import type { ClientSession, DataRow, ImportBatch } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
 
 export interface MockSessionState {
   session: ClientSession;
   rows: DataRow[];
+  /** Lịch sử job nền (mock chạy đồng bộ nên batch tạo ra đã ở trạng thái DONE). */
+  importBatches?: ImportBatch[];
   /** timer id của tick dispatcher mô phỏng — null khi không chạy */
   timer: ReturnType<typeof setInterval> | null;
   listeners: Set<(e: SessionEvent) => void>;

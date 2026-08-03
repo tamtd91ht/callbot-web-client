@@ -4,8 +4,9 @@
  * để khi flip sang real mode, FE không gặp bất ngờ về lỗi nghiệp vụ.
  */
 import type {
-  AppendMode, ClientSession, ContactSuggestion, CreateSessionRequest, DataRow,
-  ManualRowsRequest, UpdateSessionRequest,
+  AppendMode, ClientDataSource, ClientSession, ContactSuggestion, CreateSessionRequest,
+  CrmContactFilter, DataRow, ImportBatch, ImportExcelResult, ManualRowsRequest, SessionReport,
+  UpdateSessionRequest,
 } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
 import { GatewayError, type CallbotGateway, type SessionAction } from '../gateway';
@@ -38,6 +39,33 @@ function must(id: string): MockSessionState {
 function normalizePhone(phone: string): string | null {
   const digits = (phone || '').trim().replace(/^\+/, '');
   return /^\d{8,15}$/.test(digits) ? digits : null;
+}
+
+/** Mock chạy job đồng bộ nên batch sinh ra đã DONE — vẫn lưu lại để UI poll thấy lịch sử. */
+function finishedBatch(
+  id: string,
+  type: ImportBatch['type'],
+  source: ClientDataSource | undefined,
+  totalRows: number,
+  result: { inserted: number; duplicated: number; invalid: number },
+): ImportBatch {
+  const state = must(id);
+  const batch: ImportBatch = {
+    id: nextId('batch'),
+    clientSessionId: id,
+    type,
+    source,
+    status: 'DONE',
+    totalRows,
+    processedRows: totalRows,
+    inserted: result.inserted,
+    duplicated: result.duplicated,
+    invalid: result.invalid,
+    createdTimeMs: Date.now(),
+    finishedTimeMs: Date.now(),
+  };
+  state.importBatches = [batch, ...(state.importBatches ?? [])].slice(0, 10);
+  return batch;
 }
 
 export const mockGateway: CallbotGateway = {
@@ -246,6 +274,128 @@ export const mockGateway: CallbotGateway = {
 
   async setAppendMode(): Promise<void> {
     // mock: appendMode truyền ngay trong addManualRows — API riêng để dành khi chốt UX với BE (09 §6.3)
+  },
+
+  // ===== Job nền + báo cáo: mock chạy ĐỒNG BỘ, kết quả có ngay (real thì chạy nền) =====
+
+  async importExcel(): Promise<ImportExcelResult> {
+    // Route handler /data/import-excel tự parse file rồi gọi addManualRows ở mock mode,
+    // nên gateway không bao giờ được gọi đường này. Ném lỗi rõ thay vì trả số 0 gây hiểu nhầm.
+    throw new GatewayError('CS_NOT_READY', 'Mock mode parse Excel tại BFF — không đi qua gateway.importExcel');
+  },
+
+  async previewCrm(_id: string, filter: CrmContactFilter): Promise<number> {
+    // ước lượng giả lập: có filter thì ít hơn, không filter thì cả "danh bạ"
+    const base = MOCK_CONTACTS.length * 120;
+    const narrowing = [filter.tagIds, filter.categoryIds, filter.businessIds, filter.userOwnerIds]
+      .filter((f) => f && f.length > 0).length;
+    return Math.max(1, Math.round(base / Math.pow(3, narrowing)));
+  },
+
+  async importCrm(id: string, filter: CrmContactFilter, appendMode?: AppendMode): Promise<ImportBatch> {
+    const count = await mockGateway.previewCrm(id, filter);
+    const rows = Array.from({ length: Math.min(count, 50) }, (_, i) => ({
+      phoneNumber: `09${String(30000000 + i).padStart(8, '0')}`,
+      variables: { full_name: `Khách CRM ${i + 1}` },
+    }));
+    const result = await mockGateway.addManualRows(id, { rows, source: 'CRM', appendMode });
+    return finishedBatch(id, 'IMPORT', 'CRM', rows.length, result);
+  },
+
+  async listImportBatches(id: string): Promise<ImportBatch[]> {
+    return must(id).importBatches ?? [];
+  },
+
+  async recheckDedupe(id: string): Promise<ImportBatch> {
+    const state = must(id);
+    if (state.session.status !== 'DRAFT') {
+      throw new GatewayError('CS_INVALID_STATE', 'Chỉ tính lại trùng khi phiên còn ở nháp');
+    }
+    // tính lại từ đầu: dòng đứng trước trong hàng đợi giữ key
+    const seen = new Set<string>();
+    let staged = 0, duplicated = 0;
+    for (const row of [...state.rows].sort((a, b) => a.priority - b.priority)) {
+      if (row.rowStatus === 'REMOVED' || row.rowStatus === 'INVALID') continue;
+      if (row.rowStatus === 'QUEUED' || row.rowStatus === 'DISPATCHED' || row.rowStatus === 'DONE') continue;
+      const key = dedupeKeyOf(state.session.dedupeConfig?.mode ?? 'PHONE', state.session.dedupeConfig?.fieldId, row.phoneNumber, row.variables);
+      if (key && seen.has(key)) {
+        row.rowStatus = 'DUPLICATE';
+        duplicated++;
+      } else {
+        if (key) seen.add(key);
+        row.rowStatus = 'STAGED';
+        staged++;
+      }
+    }
+    emitStats(state);
+    return finishedBatch(id, 'RECHECK', undefined, staged + duplicated,
+      { inserted: staged, duplicated, invalid: 0 });
+  },
+
+  async updateRow(id: string, rowId: string, patch): Promise<DataRow> {
+    const state = must(id);
+    const row = state.rows.find((r) => r.rowId === rowId);
+    if (!row) throw new GatewayError('CS_NOT_FOUND', `Không thấy dòng ${rowId}`);
+    if (row.rowStatus === 'QUEUED' || row.rowStatus === 'DISPATCHED' || row.rowStatus === 'DONE') {
+      throw new GatewayError('CS_ROW_NOT_EDITABLE', 'Dòng đã vào hàng đợi gọi — không sửa được');
+    }
+    if (patch.phoneNumber !== undefined) row.phoneNumber = patch.phoneNumber.replace(/\D/g, '');
+    if (patch.variables !== undefined) row.variables = patch.variables;
+    const key = dedupeKeyOf(state.session.dedupeConfig?.mode ?? 'PHONE', state.session.dedupeConfig?.fieldId, row.phoneNumber, row.variables);
+    const clash = key
+      ? state.rows.some((r) => r.rowId !== rowId && r.rowStatus === 'STAGED'
+        && dedupeKeyOf(state.session.dedupeConfig?.mode ?? 'PHONE', state.session.dedupeConfig?.fieldId, r.phoneNumber, r.variables) === key)
+      : false;
+    row.rowStatus = !/^\d{8,15}$/.test(row.phoneNumber) ? 'INVALID' : clash ? 'DUPLICATE' : 'STAGED';
+    row.invalidReason = row.rowStatus === 'INVALID' ? 'Số điện thoại không hợp lệ' : null;
+    emitStats(state);
+    return row;
+  },
+
+  async restoreDuplicate(id: string, rowId: string): Promise<DataRow> {
+    const state = must(id);
+    const row = state.rows.find((r) => r.rowId === rowId);
+    if (!row) throw new GatewayError('CS_NOT_FOUND', `Không thấy dòng ${rowId}`);
+    if (row.rowStatus !== 'DUPLICATE') {
+      throw new GatewayError('CS_INVALID_STATE', 'Chỉ khôi phục được dòng đang ở trạng thái Trùng');
+    }
+    row.rowStatus = 'STAGED';
+    emitStats(state);
+    return row;
+  },
+
+  async report(id: string): Promise<SessionReport> {
+    const state = must(id);
+    const byRowStatus: Record<string, number> = {};
+    const bySource: Record<string, number> = {};
+    const byCallResult: Record<string, number> = {};
+    for (const row of state.rows) {
+      byRowStatus[row.rowStatus] = (byRowStatus[row.rowStatus] ?? 0) + 1;
+      if (row.rowStatus !== 'REMOVED') bySource[row.source] = (bySource[row.source] ?? 0) + 1;
+      if (row.callResult) byCallResult[row.callResult] = (byCallResult[row.callResult] ?? 0) + 1;
+    }
+    const finished = Object.values(byCallResult).reduce((a, b) => a + b, 0);
+    const answered = byCallResult.ANSWERED ?? 0;
+    return {
+      sessionId: id,
+      name: state.session.name,
+      status: state.session.status,
+      byRowStatus, bySource, byCallResult,
+      totalRows: state.rows.length,
+      finishedCalls: finished,
+      answerRate: finished === 0 ? 0 : Math.round((answered * 10000) / finished) / 100,
+      counters: state.session.counters,
+    };
+  },
+
+  async exportData(id: string, rowStatuses?: string[]): Promise<ImportBatch> {
+    const state = must(id);
+    const filter = rowStatuses?.length ? new Set(rowStatuses) : null;
+    const count = state.rows.filter((r) => !filter || filter.has(r.rowStatus)).length;
+    const batch = finishedBatch(id, 'EXPORT', undefined, count, { inserted: 0, duplicated: 0, invalid: 0 });
+    batch.fileName = `${state.session.name}.xlsx`;
+    batch.fileKey = `mock/export/${id}.xlsx`;
+    return batch;
   },
 
   subscribe(id: string, listener: (e: SessionEvent) => void): () => void {
