@@ -75,6 +75,12 @@ export interface ClientSession {
   createdTimeMs: number;
   submittedTimeMs?: number | null;
   completedTimeMs?: number | null;
+  /**
+   * [GAP với BE — chờ sign-off docs 04 §5] Template UI cho kéo-thả thứ tự ưu tiên biến theo 3 NGUỒN
+   * (EXCEL / CRM / MANUAL) nhưng contract BE hiện là enum 2 giá trị variablePriority.
+   * FE lưu thứ tự đầy đủ ở đây; variablePriority được derive (CRM đứng đầu → CRM_CONTACT_FIRST).
+   */
+  variableOrder?: string[];
 }
 
 export interface DataRow {
@@ -96,6 +102,7 @@ export interface DataRow {
 
 export interface CreateSessionRequest {
   name: string;
+  variableOrder?: string[];
   purpose?: string;
   startTimeMs?: number | null;
   timeSlots?: TimeSlot[];
@@ -113,6 +120,31 @@ export interface CreateSessionRequest {
 export interface ManualRowsRequest {
   rows: Array<{ phoneNumber: string; variables?: Record<string, string> }>;
   appendMode?: AppendMode; // chỉ có nghĩa khi phiên RUNNING/PAUSED
+  /** Nguồn của đợt nạp — BFF mặc định MANUAL; drawer Excel/CRM truyền tương ứng */
+  source?: ClientDataSource;
+}
+
+/** PATCH config draft (docs 01 §5: nhóm core chỉ sửa được ở DRAFT). */
+export type UpdateSessionRequest = Partial<Omit<CreateSessionRequest, 'sipNumbers'>> & {
+  sipNumbers?: SipNumber[];
+  variableOrder?: string[];
+};
+
+/** Gợi ý contact CRM cho autocomplete drawer Thủ công (mock — real mode sẽ qua API contact). */
+export interface ContactSuggestion {
+  id: string;
+  name: string;
+  phones: string[];
+}
+
+/** Kết quả import Excel (BFF parse server-side). */
+export interface ImportExcelResult {
+  fileName: string;
+  totalRows: number;
+  inserted: number;
+  duplicated: number;
+  invalid: number;
+  errors: Array<{ row: number; reason: string }>;
 }
 
 // ===== Envelope (BE dùng {code,message,data} — BFF giữ nguyên) =====

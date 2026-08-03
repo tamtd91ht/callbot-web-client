@@ -20,3 +20,13 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     return fail(e);
   }
 }
+
+export async function DELETE(request: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await ctx.params;
+    const { rowIds } = await request.json();
+    return ok(await getGateway().removeRows(id, rowIds ?? []));
+  } catch (e) {
+    return fail(e);
+  }
+}

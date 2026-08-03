@@ -9,3 +9,13 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     return fail(e);
   }
 }
+
+export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await ctx.params;
+    const patch = await request.json();
+    return ok(await getGateway().updateSession(id, patch));
+  } catch (e) {
+    return fail(e);
+  }
+}

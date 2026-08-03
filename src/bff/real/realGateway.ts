@@ -6,7 +6,8 @@
  * KHÔNG qua BFF — subscribe() ở đây chỉ dùng cho mock.
  */
 import type {
-  AppendMode, ApiEnvelope, ClientSession, CreateSessionRequest, DataRow, ManualRowsRequest,
+  AppendMode, ApiEnvelope, ClientSession, ContactSuggestion, CreateSessionRequest,
+  DataRow, ManualRowsRequest, UpdateSessionRequest,
 } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
 import { GatewayError, type CallbotGateway, type SessionAction } from '../gateway';
@@ -34,6 +35,13 @@ export const realGateway: CallbotGateway = {
   createSession: (req: CreateSessionRequest) => call<ClientSession>('/client-session/create', req),
   listSessions: () => call<ClientSession[]>('/client-session/search', {}),
   getSession: (id: string) => call<ClientSession>('/client-session/get-by-id', { id }),
+  updateSession: (id: string, patch: UpdateSessionRequest) =>
+    call<ClientSession>('/client-session/update', { id, ...patch }),
+  removeRows: (id: string, rowIds: string[]) =>
+    call<number>(`/client-session/${id}/data/delete`, { rowIds }),
+  searchContacts: (query: string) =>
+    // real mode: đi qua API contact CRM (chốt endpoint với BE khi làm C-03)
+    call<ContactSuggestion[]>('/client-session/contact/suggest', { keyword: query }),
   doAction: (id: string, action: SessionAction) => call<ClientSession>(`/client-session/${action}`, { id }),
   addManualRows: (id: string, req: ManualRowsRequest) =>
     call(`/client-session/${id}/data/manual`, req),

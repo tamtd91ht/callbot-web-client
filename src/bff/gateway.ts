@@ -6,7 +6,8 @@
  * FE/route handlers KHÔNG được import mock/real trực tiếp — chỉ qua getGateway().
  */
 import type {
-  AppendMode, ClientSession, CreateSessionRequest, DataRow, ManualRowsRequest,
+  AppendMode, ClientSession, ContactSuggestion, CreateSessionRequest, DataRow,
+  ManualRowsRequest, UpdateSessionRequest,
 } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
 
@@ -22,9 +23,15 @@ export interface CallbotGateway {
   createSession(req: CreateSessionRequest): Promise<ClientSession>;
   listSessions(): Promise<ClientSession[]>;
   getSession(id: string): Promise<ClientSession>;
+  /** PATCH config — nhóm core chỉ khi DRAFT (docs 01 §5). */
+  updateSession(id: string, patch: UpdateSessionRequest): Promise<ClientSession>;
   doAction(id: string, action: SessionAction): Promise<ClientSession>;
   addManualRows(id: string, req: ManualRowsRequest): Promise<{ inserted: number; duplicated: number; invalid: number; rows: DataRow[] }>;
   searchRows(id: string, statuses?: string[]): Promise<DataRow[]>;
+  /** Xoá rows (chỉ STAGED/DUPLICATE/INVALID → REMOVED). */
+  removeRows(id: string, rowIds: string[]): Promise<number>;
+  /** Autocomplete contact CRM cho drawer Thủ công (mock; real qua API contact). */
+  searchContacts(query: string): Promise<ContactSuggestion[]>;
   setAppendMode(id: string, mode: AppendMode): Promise<void>;
   /** Đăng ký nhận realtime events của 1 phiên (mock: từ simulator; real: C-03 sẽ chuyển FE nối socket trực tiếp). */
   subscribe(id: string, listener: (e: SessionEvent) => void): () => void;

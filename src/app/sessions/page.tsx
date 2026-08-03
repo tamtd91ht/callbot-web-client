@@ -1,16 +1,13 @@
 'use client';
-/**
- * Danh sách phiên + tạo nhanh — SKELETON để demo luồng (UI thật chờ mẫu, ticket C-02).
- */
+/** Danh sách phiên — restyle theo tokens template; tạo phiên chuyển sang màn /sessions/new (C-02a). */
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import type { ClientSession } from '@/contracts/types';
-import { get, post, ApiError } from '@/lib/apiClient';
+import { get } from '@/lib/apiClient';
+import { Button, Card } from '@/components/ui';
 
 export default function SessionsPage() {
   const [sessions, setSessions] = useState<ClientSession[]>([]);
-  const [name, setName] = useState('');
-  const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setSessions(await get<ClientSession[]>('/api/client-session'));
@@ -18,66 +15,62 @@ export default function SessionsPage() {
 
   useEffect(() => {
     void reload();
-    const timer = setInterval(reload, 5000); // list poll nhẹ; màn chi tiết mới dùng realtime
+    const timer = setInterval(reload, 5000); // list poll nhẹ; màn chi tiết dùng realtime
     return () => clearInterval(timer);
   }, [reload]);
 
-  async function createSession() {
-    setError(null);
-    try {
-      const session = await post<ClientSession>('/api/client-session', {
-        name: name || `Phiên demo ${new Date().toLocaleTimeString('vi-VN')}`,
-        sipNumbers: [{ number: '842873001111', network: 'viettel' }],
-        batchSize: 20,
-        batchIntervalSeconds: 30,
-        dedupeConfig: { mode: 'PHONE' },
-        retryConfig: { trigger: 'NO_ANSWER', maxRetry: 1, delaySeconds: 60 },
-      });
-      setName('');
-      window.location.href = `/sessions/${session.id}`;
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
-    }
-  }
-
   return (
-    <>
-      <div className="card">
-        <h2>Tạo phiên mới (rút gọn — wizard đầy đủ ở C-02)</h2>
-        <div className="row">
-          <div style={{ flex: 1 }}>
-            <input placeholder="Tên phiên" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <button className="primary" onClick={createSession}>Tạo phiên nháp</button>
+    <Card>
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold">Phiên gọi callbot</h1>
+          <div className="mt-1 h-1 w-8 rounded bg-(--color-primary)" />
         </div>
-        {error && <div className="error">{error}</div>}
+        <Link href="/sessions/new">
+          <Button variant="primary" className="px-6">+ Tạo phiên</Button>
+        </Link>
       </div>
 
-      <div className="card">
-        <h2>Danh sách phiên</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Tên</th><th>Trạng thái</th><th>Tổng data</th><th>Còn lại</th><th>Nghe máy</th><th></th>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-(--color-line) text-left text-(--color-muted)">
+            <th className="px-3 py-2 font-semibold">Tên phiên</th>
+            <th className="px-3 py-2 font-semibold">Trạng thái</th>
+            <th className="px-3 py-2 font-semibold">Mục đích</th>
+            <th className="px-3 py-2 font-semibold">Tổng data</th>
+            <th className="px-3 py-2 font-semibold">Còn lại</th>
+            <th className="px-3 py-2 font-semibold">Nghe máy</th>
+            <th className="px-3 py-2" />
+          </tr>
+        </thead>
+        <tbody>
+          {sessions.map((s) => (
+            <tr key={s.id} className="border-b border-(--color-line) last:border-0 hover:bg-gray-50">
+              <td className="px-3 py-3 font-medium">{s.name}</td>
+              <td className="px-3 py-3">
+                <span className={`badge ${s.status}`}>{s.status}</span>
+                {s.pausedCause && <div className="mt-0.5 text-xs text-amber-700">{s.pausedCause}</div>}
+              </td>
+              <td className="px-3 py-3 text-(--color-muted)">{s.purpose ?? '—'}</td>
+              <td className="px-3 py-3">{s.counters?.total ?? 0}</td>
+              <td className="px-3 py-3">{s.counters?.remaining ?? 0}</td>
+              <td className="px-3 py-3">{s.counters?.answered ?? 0}</td>
+              <td className="px-3 py-3 text-right">
+                <Link className="text-(--color-link) hover:underline" href={`/sessions/${s.id}`}>
+                  {s.status === 'DRAFT' ? 'Tiếp tục nháp →' : 'Chi tiết →'}
+                </Link>
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {sessions.map((s) => (
-              <tr key={s.id}>
-                <td>{s.name}</td>
-                <td><span className={`badge ${s.status}`}>{s.status}</span></td>
-                <td>{s.counters?.total ?? 0}</td>
-                <td>{s.counters?.remaining ?? 0}</td>
-                <td>{s.counters?.answered ?? 0}</td>
-                <td><Link href={`/sessions/${s.id}`}>Chi tiết →</Link></td>
-              </tr>
-            ))}
-            {sessions.length === 0 && (
-              <tr><td colSpan={6} style={{ color: '#667085' }}>Chưa có phiên nào — tạo phiên đầu tiên ở trên.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </>
+          ))}
+          {sessions.length === 0 && (
+            <tr>
+              <td colSpan={7} className="px-3 py-8 text-center text-(--color-muted)">
+                Chưa có phiên nào — bấm <b>+ Tạo phiên</b> để bắt đầu.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </Card>
   );
 }

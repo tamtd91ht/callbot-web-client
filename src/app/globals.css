@@ -1,27 +1,47 @@
-/* Skeleton CSS tối giản — CHƯA chọn design system (chờ UI mẫu, quyết ở ticket C-02) */
-* { box-sizing: border-box; }
-body { margin: 0; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; background: #f6f7f9; color: #1a1d21; }
-.topbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px; background: #101828; color: #fff; }
-.mode-badge { font-size: 12px; background: #334155; padding: 2px 10px; border-radius: 999px; }
-.container { max-width: 1080px; margin: 24px auto; padding: 0 16px; }
-.card { background: #fff; border: 1px solid #e4e7ec; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eef0f3; }
-button { cursor: pointer; border: 1px solid #d0d5dd; background: #fff; border-radius: 6px; padding: 6px 14px; font-size: 14px; }
-button.primary { background: #175cd3; border-color: #175cd3; color: #fff; }
-button:disabled { opacity: 0.45; cursor: not-allowed; }
-input, textarea, select { border: 1px solid #d0d5dd; border-radius: 6px; padding: 7px 10px; font-size: 14px; width: 100%; }
-.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-.badge.DRAFT { background: #eef0f3; }
-.badge.SCHEDULED { background: #fef0c7; color: #93370d; }
-.badge.RUNNING { background: #d1fadf; color: #05603a; }
-.badge.PAUSED { background: #fde9c8; color: #93370d; }
-.badge.COMPLETED { background: #d3e5fe; color: #1849a9; }
-.badge.CANCELED { background: #fee4e2; color: #912018; }
-.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
-.stat { background: #f9fafb; border: 1px solid #eef0f3; border-radius: 8px; padding: 10px 12px; }
-.stat .label { font-size: 12px; color: #667085; }
-.stat .value { font-size: 22px; font-weight: 700; }
-.error { color: #b42318; font-size: 13px; margin-top: 8px; }
-a { color: #175cd3; text-decoration: none; }
+@import 'tailwindcss';
+
+/*
+ * Design tokens theo template OmiCall (docs/ui/img*.png bên repo callbot-service):
+ * primary xanh lá, topbar navy, nền xám nhạt, card trắng bo 12px, input filled label bên trong.
+ * AD-C5 đã đóng: Tailwind CSS v4 (quyết định user 2026-08-03).
+ */
+@theme {
+  --color-primary: #2eb85c;
+  --color-primary-dark: #249a4c;
+  --color-primary-soft: #e6f7ec;
+  --color-navy: #0f2137;
+  --color-page: #f4f6f8;
+  --color-card: #ffffff;
+  --color-field: #f5f6f8;
+  --color-line: #e4e7ec;
+  --color-ink: #1a1d21;
+  --color-muted: #667085;
+  --color-link: #2f80ed;
+  --color-danger: #e5484d;
+  --radius-card: 12px;
+  --radius-field: 10px;
+}
+
+body {
+  background: var(--color-page);
+  color: var(--color-ink);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Badge trạng thái phiên — giữ semantic class (render từ status string) */
+.badge { @apply inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold; }
+.badge.DRAFT { @apply bg-gray-100 text-gray-700; }
+.badge.SCHEDULED { @apply bg-amber-100 text-amber-800; }
+.badge.RUNNING { @apply bg-green-100 text-green-800; }
+.badge.PAUSED { @apply bg-orange-100 text-orange-800; }
+.badge.COMPLETED { @apply bg-blue-100 text-blue-800; }
+.badge.CANCELED { @apply bg-red-100 text-red-800; }
+
+.rowstatus { @apply inline-block rounded px-2 py-0.5 text-xs font-medium; }
+.rowstatus.STAGED { @apply bg-gray-100 text-gray-700; }
+.rowstatus.DUPLICATE { @apply bg-amber-100 text-amber-800; }
+.rowstatus.INVALID { @apply bg-red-100 text-red-700; }
+.rowstatus.QUEUED { @apply bg-sky-100 text-sky-800; }
+.rowstatus.DISPATCHED { @apply bg-indigo-100 text-indigo-800; }
+.rowstatus.DONE { @apply bg-green-100 text-green-800; }
+.rowstatus.REMOVED { @apply bg-gray-100 text-gray-400 line-through; }

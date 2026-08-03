@@ -4,7 +4,8 @@
  * để khi flip sang real mode, FE không gặp bất ngờ về lỗi nghiệp vụ.
  */
 import type {
-  AppendMode, ClientSession, CreateSessionRequest, DataRow, ManualRowsRequest,
+  AppendMode, ClientSession, ContactSuggestion, CreateSessionRequest, DataRow,
+  ManualRowsRequest, UpdateSessionRequest,
 } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
 import { GatewayError, type CallbotGateway, type SessionAction } from '../gateway';
@@ -12,6 +13,21 @@ import { db, emit, nextId, type MockSessionState } from './store';
 import { computeCounters, emitLifecycle, emitStats, startTicking, stopTicking } from './simulator';
 
 const TENANT_ID = 'tenant_demo';
+
+/** Danh bạ mock cho autocomplete (img_2 template) — real mode sẽ query API contact CRM. */
+const MOCK_CONTACTS: ContactSuggestion[] = [
+  { id: 'cnt_1', name: 'TamTD', phones: ['0983223566', '0964913264'] },
+  { id: 'cnt_2', name: 'Nguyen Van A', phones: ['0987654321'] },
+  { id: 'cnt_3', name: 'Tran Thi B', phones: ['0912345678', '0908111222'] },
+  { id: 'cnt_4', name: 'Le Van C', phones: ['0905000111'] },
+  { id: 'cnt_5', name: 'Pham Thi D', phones: ['0977888999'] },
+  { id: 'cnt_6', name: 'Hoang Van E', phones: ['0966555444'] },
+  { id: 'cnt_7', name: 'Vu Thi F', phones: ['0933222111'] },
+  { id: 'cnt_8', name: 'Dang Van G', phones: ['0922333444', '0899000111'] },
+];
+
+/** Nhóm config core chỉ sửa được ở DRAFT (docs 01 §5); nhóm tunable sửa được khi chưa terminal. */
+const RUNTIME_TUNABLE_KEYS = new Set(['name', 'purpose', 'timeSlots', 'batchSize', 'batchIntervalSeconds', 'startTimeMs']);
 
 function must(id: string): MockSessionState {
   const state = db().sessions.get(id);
@@ -62,6 +78,31 @@ export const mockGateway: CallbotGateway = {
   async getSession(id: string): Promise<ClientSession> {
     const state = must(id);
     return { ...state.session, counters: computeCounters(state) };
+  },
+
+  async updateSession(id: string, patch: UpdateSessionRequest): Promise<ClientSession> {
+    const state = must(id);
+    const s = state.session;
+    if (s.status === 'COMPLETED' || s.status === 'CANCELED') {
+      throw new GatewayError('CS_INVALID_STATE', 'Session is terminal — cannot update');
+    }
+    const entries = Object.entries(patch).filter(([, v]) => v !== undefined);
+    if (s.status !== 'DRAFT') {
+      const illegal = entries.map(([k]) => k).filter((k) => !RUNTIME_TUNABLE_KEYS.has(k));
+      if (illegal.length > 0) {
+        throw new GatewayError('CS_INVALID_STATE',
+          `Chỉ sửa được ${[...RUNTIME_TUNABLE_KEYS].join('/')} khi phiên đã submit — vi phạm: ${illegal.join(', ')}`);
+      }
+    }
+    Object.assign(s, Object.fromEntries(entries));
+    // derive variablePriority từ variableOrder (gap docs 04 §5): CRM đứng trước MANUAL → CRM_CONTACT_FIRST
+    if (patch.variableOrder) {
+      const crmIdx = patch.variableOrder.indexOf('CRM');
+      const manualIdx = patch.variableOrder.indexOf('MANUAL');
+      s.variablePriority = crmIdx >= 0 && manualIdx >= 0 && crmIdx < manualIdx
+        ? 'CRM_CONTACT_FIRST' : 'SESSION_DATA_FIRST';
+    }
+    return { ...s, counters: computeCounters(state) };
   },
 
   async doAction(id: string, action: SessionAction): Promise<ClientSession> {
@@ -144,7 +185,7 @@ export const mockGateway: CallbotGateway = {
         clientSessionId: id,
         phoneNumber: phone ?? raw.phoneNumber,
         variables: raw.variables,
-        source: 'MANUAL',
+        source: req.source ?? 'MANUAL',
         rowStatus: 'STAGED',
         priority: basePriority + i,
         createdTimeMs: Date.now(),
@@ -176,6 +217,31 @@ export const mockGateway: CallbotGateway = {
     return state.rows
       .filter((r) => !filter || filter.has(r.rowStatus))
       .sort((a, b) => a.priority - b.priority || a.createdTimeMs - b.createdTimeMs);
+  },
+
+  async removeRows(id: string, rowIds: string[]): Promise<number> {
+    const state = must(id);
+    const ids = new Set(rowIds);
+    let removed = 0;
+    for (const row of state.rows) {
+      if (ids.has(row.rowId)) {
+        if (row.rowStatus === 'QUEUED' || row.rowStatus === 'DISPATCHED' || row.rowStatus === 'DONE') {
+          throw new GatewayError('CS_ROW_NOT_EDITABLE', `Row đã vào pipeline gọi: ${row.rowId}`);
+        }
+        row.rowStatus = 'REMOVED';
+        removed++;
+      }
+    }
+    emitStats(state);
+    return removed;
+  },
+
+  async searchContacts(query: string): Promise<ContactSuggestion[]> {
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return [];
+    return MOCK_CONTACTS.filter(
+      (c) => c.name.toLowerCase().includes(q) || c.phones.some((p) => p.includes(q)),
+    ).slice(0, 8);
   },
 
   async setAppendMode(): Promise<void> {

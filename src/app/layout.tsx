@@ -10,11 +10,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="vi">
       <body>
-        <header className="topbar">
-          <strong>Callbot · Client Session</strong>
-          <span className="mode-badge">mode: {process.env.CALLBOT_MODE === 'real' ? 'REAL' : 'MOCK'}</span>
+        <header className="flex items-center justify-between bg-(--color-navy) px-6 py-3 text-white">
+          <div className="flex items-center gap-3">
+            <span className="text-lg font-extrabold tracking-wide">OMI<span className="text-(--color-primary)">CALL</span></span>
+            <span className="text-sm text-white/70">· Client Session</span>
+          </div>
+          <span className="rounded-full bg-white/15 px-3 py-0.5 text-xs">
+            mode: {process.env.CALLBOT_MODE === 'real' ? 'REAL' : 'MOCK'}
+          </span>
         </header>
-        <main className="container">{children}</main>
+        <main className="mx-auto max-w-350 px-4 py-6">{children}</main>
       </body>
     </html>
   );
