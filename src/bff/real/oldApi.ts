@@ -41,7 +41,11 @@ export async function callOld<T>(path: string, body: unknown): Promise<T> {
   }
   const code = envelope.status_code ?? envelope.statusCode;
   if (code !== SUCCESS_CODE) {
-    throw new GatewayError('CS_UPSTREAM_ERROR', envelope.message || `Lỗi backend (code ${code})`);
+    const msg = envelope.message || `Lỗi backend (code ${code})`;
+    // Convention B8: envelope không có field errorCode — lỗi nghiệp vụ mang prefix "CS_XXX: ..."
+    const prefixed = /^(CS_[A-Z_]+):\s*(.*)$/s.exec(msg);
+    if (prefixed) throw new GatewayError(prefixed[1], prefixed[2] || msg);
+    throw new GatewayError('CS_UPSTREAM_ERROR', msg);
   }
   return envelope.payload as T;
 }

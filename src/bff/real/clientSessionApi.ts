@@ -1,0 +1,161 @@
+/**
+ * Transport + mapper cho API MỚI /call-bot/client-session/* (ticket B8 — 12 endpoints,
+ * branch feature/client-session-foundation của callbot-service).
+ * Envelope + auth y hệt API cũ (VertxController): {status_code: 9999, payload}, Bearer JWT.
+ * Lỗi nghiệp vụ nhận diện qua message prefix "CS_XXX: ..." — callOld đã parse thành GatewayError.
+ * Body mirror docs 05 + contracts/types.ts (camelCase, id trong body, toàn POST).
+ */
+import { callOld } from './oldApi';
+import type {
+  ClientDataSource, ClientRowStatus, ClientSession, ClientSessionStatus,
+  ContactSuggestion, CreateSessionRequest, DataRow, DedupeConfig, RetryConfig,
+  SessionCounters, SipNumber, TimeSlot, UpdateSessionRequest, VariablePriority,
+} from '@/contracts/types';
+
+export function csCall<T>(path: string, body: unknown): Promise<T> {
+  return callOld<T>(`/client-session${path}`, body);
+}
+
+/* ===================== Shapes backend (mirror ClientSession.java) ===================== */
+
+export interface BeClientSession {
+  id: string; // hex — alias getIdHex()
+  tenantId?: string;
+  name?: string;
+  purpose?: string;
+  status?: ClientSessionStatus;
+  startTimeMs?: number;
+  timeSlots?: TimeSlot[];
+  timezoneId?: string;
+  sipNumbers?: SipNumber[];
+  scriptId?: string;
+  scriptUuid?: string;
+  voiceOverride?: string | null;
+  retryConfig?: RetryConfig | null;
+  batchSize?: number;
+  batchIntervalSeconds?: number;
+  variablePriority?: VariablePriority;
+  variableOrder?: string[];
+  dedupeConfig?: DedupeConfig;
+  runtimeSessionId?: string | null;
+  counters?: Partial<SessionCounters>;
+  cancelCause?: string | null;
+  pausedCause?: string | null;
+  createdTimeMs?: number;
+  submittedTimeMs?: number | null;
+  completedTimeMs?: number | null;
+}
+
+export interface BeDataRow {
+  rowId: string;
+  clientSessionId?: string;
+  phoneNumber?: string;
+  variables?: Record<string, string>;
+  source?: ClientDataSource;
+  rowStatus?: ClientRowStatus;
+  invalidReason?: string | null;
+  priority?: number;
+  recordId?: string | null;
+  createdTimeMs?: number;
+}
+
+export interface BeIngestResult {
+  inserted?: number;
+  duplicated?: number;
+  invalid?: number;
+  rowOutcomes?: Array<{ rowId: string; phoneNumber?: string; status?: ClientRowStatus; reason?: string }>;
+}
+
+export interface BeDataPage {
+  rows?: BeDataRow[];
+  total?: number;
+  nextSearchAfter?: unknown[];
+}
+
+/* ===================== Mapping backend → contracts ===================== */
+
+export function mapClientSession(dto: BeClientSession): ClientSession {
+  const c = dto.counters ?? {};
+  const total = c.total ?? 0;
+  const finished = (c.answered ?? 0) + (c.noAnswer ?? 0) + (c.failed ?? 0) + (c.canceled ?? 0);
+  const counters: SessionCounters = {
+    total,
+    staged: c.staged ?? 0,
+    duplicated: c.duplicated ?? 0,
+    invalid: c.invalid ?? 0,
+    queued: c.queued ?? 0,
+    dispatched: c.dispatched ?? 0,
+    remaining: Math.max(0, total - finished),
+    answered: c.answered ?? 0,
+    noAnswer: c.noAnswer ?? 0,
+    failed: c.failed ?? 0,
+    canceled: c.canceled ?? 0,
+    totalRecords: c.dispatched ?? 0,
+    retried: c.retried ?? 0,
+  };
+  return {
+    id: dto.id,
+    tenantId: dto.tenantId ?? '',
+    name: dto.name ?? dto.id,
+    purpose: dto.purpose,
+    status: dto.status ?? 'DRAFT',
+    startTimeMs: dto.startTimeMs ?? null,
+    timeSlots: dto.timeSlots,
+    timezoneId: dto.timezoneId,
+    sipNumbers: dto.sipNumbers ?? [],
+    scriptId: dto.scriptId,
+    scriptUuid: dto.scriptUuid,
+    voiceOverride: dto.voiceOverride ?? null,
+    retryConfig: dto.retryConfig ?? null,
+    batchSize: dto.batchSize ?? 50,
+    batchIntervalSeconds: dto.batchIntervalSeconds ?? 30,
+    variablePriority: dto.variablePriority,
+    variableOrder: dto.variableOrder,
+    dedupeConfig: dto.dedupeConfig,
+    runtimeSessionId: dto.runtimeSessionId ?? null,
+    counters,
+    pausedCause: dto.pausedCause ?? null,
+    cancelCause: dto.cancelCause ?? null,
+    createdTimeMs: dto.createdTimeMs ?? 0,
+    submittedTimeMs: dto.submittedTimeMs ?? null,
+    completedTimeMs: dto.completedTimeMs ?? null,
+  };
+}
+
+export function mapClientRow(dto: BeDataRow, clientSessionId: string): DataRow {
+  return {
+    rowId: dto.rowId,
+    clientSessionId: dto.clientSessionId ?? clientSessionId,
+    phoneNumber: dto.phoneNumber ?? '',
+    variables: dto.variables,
+    source: dto.source ?? 'MANUAL',
+    rowStatus: dto.rowStatus ?? 'STAGED',
+    invalidReason: dto.invalidReason ?? null,
+    priority: dto.priority ?? 0,
+    recordId: dto.recordId ?? null,
+    callResult: null, // join kết quả gọi qua recordId: B9 viewer — chưa có ở B8
+    createdTimeMs: dto.createdTimeMs ?? 0,
+  };
+}
+
+/**
+ * Làm sạch config trước khi gửi BE:
+ *  - voiceOverride '' (option "Theo kịch bản") → bỏ hẳn — BE là enum Voice, Jackson gặp '' sẽ
+ *    fail parse và applyJsonConfig bỏ qua TOÀN BỘ config phức (mất sipNumbers).
+ *  - loại mọi key undefined/null để không đè giá trị đang có khi update.
+ */
+export function sanitizeConfig<T extends CreateSessionRequest | UpdateSessionRequest>(req: T): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(req)) {
+    if (v === undefined || v === null) continue;
+    if (k === 'voiceOverride' && v === '') continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+export const mapContactSuggestion = (raw: { id?: string; name?: string; phones?: string[] }): ContactSuggestion => ({
+  id: raw.id ?? '',
+  name: raw.name ?? 'Không xác định',
+  phones: raw.phones ?? [],
+});
