@@ -2,11 +2,15 @@
 /**
  * Drawer "Thêm khách hàng" — 3 tab như template img_1/img_2:
  *   Thủ công: input + autocomplete contact CRM → "Danh sách thêm khả dụng" (staging) → chốt thêm
- *   File Excel: client CHỈ gửi FormData — BFF parse server-side (quyết định user)
- *   Thuộc tính khách hàng: tìm theo thuộc tính (mock) → preview → thêm cả nhóm (source=CRM)
+ *   File Excel: client CHỈ gửi FormData — mock parse tại BFF, real đẩy nguyên file xuống BE
+ *     (parse nền, có file dòng lỗi) → tab tự theo dõi batch cho tới khi xong
+ *   Thuộc tính khách hàng: filter → đếm trước (preview) → nạp snapshot chạy nền (source=CRM)
  */
 import { useEffect, useRef, useState } from 'react';
-import type { AppendMode, ClientSessionStatus, ContactSuggestion, DataRow, ImportExcelResult } from '@/contracts/types';
+import type {
+  AppendMode, ClientSessionStatus, ContactSuggestion, CrmContactFilter, DataRow,
+  ImportBatch, ImportExcelResult,
+} from '@/contracts/types';
 import { ApiError, api, get, post } from '@/lib/apiClient';
 import { Button, Drawer, Tabs, inputClass } from '../ui';
 import { COUNTRY_CODE_OPTIONS, type CountryCodeOption, applyCountryCode } from './catalogs';
@@ -231,25 +235,68 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ImportExcelResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Real mode: BE parse nền → cần theo dõi batch chứ không có kết quả ngay. */
+  const [pendingBatch, setPendingBatch] = useState<{ sessionId: string; batchId: string } | null>(null);
+  const [progress, setProgress] = useState<ImportBatch | null>(null);
 
   async function upload() {
     if (!file) return;
-    setBusy(true); setError(null); setResult(null);
+    setBusy(true); setError(null); setResult(null); setPendingBatch(null);
     try {
       const sessionId = await ensureSessionId();
       const form = new FormData();
       form.append('file', file);
       if (running) form.append('appendMode', appendMode);
-      // client CHỈ gửi FormData — parse ở BFF (server-side, quyết định user)
+      // client CHỈ gửi FormData; BFF parse (mock) hoặc đẩy nguyên file xuống BE (real)
       const data = await api<ImportExcelResult>(`/api/client-session/${sessionId}/data/import-excel`, {
         method: 'POST', body: form, headers: undefined,
       });
-      setResult(data);
-      onAdded(data);
+      if (data.pending && data.importBatchId) {
+        // Real mode: BE parse nền → theo dõi batch cho tới khi xong mới có số liệu
+        setPendingBatch({ sessionId, batchId: data.importBatchId });
+      } else {
+        setResult(data);
+        onAdded(data);
+      }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     } finally { setBusy(false); }
   }
+
+  // Poll batch của lần upload này (không phải cả danh sách) cho tới DONE/FAILED
+  useEffect(() => {
+    if (!pendingBatch) return;
+    let stopped = false;
+    const timer = setInterval(async () => {
+      try {
+        const batches = await get<ImportBatch[]>(`/api/client-session/${pendingBatch.sessionId}/jobs`);
+        const batch = batches.find((b) => b.id === pendingBatch.batchId);
+        if (!batch || stopped) return;
+        setProgress(batch);
+        if (batch.status === 'DONE' || batch.status === 'FAILED') {
+          stopped = true;
+          clearInterval(timer);
+          setPendingBatch(null);
+          if (batch.status === 'FAILED') {
+            setError(batch.failReason || 'Import thất bại — xem chi tiết ở khu Xử lý nền');
+          } else {
+            setResult({
+              fileName: file?.name ?? '',
+              totalRows: batch.totalRows ?? 0,
+              inserted: batch.inserted ?? 0,
+              duplicated: batch.duplicated ?? 0,
+              invalid: batch.invalid ?? 0,
+              errors: [],
+            });
+            onAdded({ inserted: batch.inserted ?? 0, duplicated: batch.duplicated ?? 0, invalid: batch.invalid ?? 0 });
+          }
+        }
+      } catch {
+        /* mất 1 nhịp poll không sao — nhịp sau thử lại */
+      }
+    }, 2000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [pendingBatch, file, onAdded]);
 
   return (
     <div className="flex h-full flex-col p-6">
@@ -264,6 +311,22 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
         <input type="file" accept=".xlsx,.xls,.csv" className="hidden"
           onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }} />
       </label>
+
+      {pendingBatch && (
+        <div className="mt-4 rounded-xl border border-(--color-line) bg-(--color-field) p-4 text-sm">
+          <div className="font-semibold">Đang xử lý trên server…</div>
+          <div className="mt-1 text-xs text-(--color-muted)">
+            File lớn được đọc theo luồng nên có thể mất vài phút. Bạn có thể đóng cửa sổ này —
+            tiến độ vẫn theo dõi được ở khu <b>Xử lý nền</b> của phiên.
+          </div>
+          {progress && (
+            <div className="mt-2 text-xs">
+              Đã xử lý {(progress.processedRows ?? 0).toLocaleString('vi-VN')} dòng
+              {(progress.totalRows ?? 0) > 0 && ` / ${(progress.totalRows ?? 0).toLocaleString('vi-VN')}`}
+            </div>
+          )}
+        </div>
+      )}
 
       {result && (
         <div className="mt-4 rounded-xl border border-(--color-line) p-4 text-sm">
@@ -282,7 +345,9 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
       )}
 
       <div className="mt-auto flex items-center gap-3 border-t border-(--color-line) pt-4">
-        <Button variant="primary" disabled={!file || busy} onClick={upload}>{busy ? 'Đang xử lý…' : 'Tải lên & thêm vào phiên'}</Button>
+        <Button variant="primary" disabled={!file || busy || !!pendingBatch} onClick={upload}>
+          {busy ? 'Đang tải lên…' : pendingBatch ? 'Server đang xử lý…' : 'Tải lên & thêm vào phiên'}
+        </Button>
         <Button onClick={onClose}>Đóng</Button>
         <AppendModePicker running={running} appendMode={appendMode} setAppendMode={setAppendMode} />
         {error && <span className="text-sm text-(--color-danger)">{error}</span>}
@@ -293,29 +358,55 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
 
 /* ====================== TAB THUỘC TÍNH KHÁCH HÀNG (CRM) ====================== */
 
+/** Bộ lọc BE hỗ trợ (B6). Chưa có API danh mục tag/nhóm nên nhập ID, phân cách bằng dấu phẩy. */
+const CRM_FILTER_FIELDS = [
+  { key: 'tagIds' as const, label: 'Tag', placeholder: 'tag_vip, tag_moi' },
+  { key: 'categoryIds' as const, label: 'Nhóm khách hàng', placeholder: 'cat_1, cat_2' },
+  { key: 'businessIds' as const, label: 'Loại hình', placeholder: 'biz_1' },
+  { key: 'userOwnerIds' as const, label: 'Người phụ trách', placeholder: 'user_1' },
+];
+
 function CrmTab({ ensureSessionId, onAdded, onClose, running, appendMode, setAppendMode }: TabProps) {
-  const [keyword, setKeyword] = useState('');
-  const [preview, setPreview] = useState<ContactSuggestion[] | null>(null);
+  const [raw, setRaw] = useState<Record<string, string>>({});
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [count, setCount] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [enqueued, setEnqueued] = useState(false);
 
-  async function search() {
-    setBusy(true); setError(null);
-    try { setPreview(await get<ContactSuggestion[]>(`/api/contacts/search?q=${encodeURIComponent(keyword || '0')}`)); }
-    catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
+  function buildFilter(): CrmContactFilter {
+    const filter: CrmContactFilter = {};
+    for (const field of CRM_FILTER_FIELDS) {
+      const ids = (raw[field.key] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+      if (ids.length) filter[field.key] = ids;
+    }
+    if (dateFrom) filter.createdFromMs = new Date(dateFrom).getTime();
+    // đến hết ngày đã chọn, không phải 00:00 của ngày đó
+    if (dateTo) filter.createdToMs = new Date(dateTo).getTime() + 86_399_999;
+    return filter;
+  }
+
+  async function preview() {
+    setBusy(true); setError(null); setEnqueued(false);
+    try {
+      const sessionId = await ensureSessionId();
+      const data = await post<{ estimatedCount: number }>(
+        `/api/client-session/${sessionId}/jobs`, { action: 'preview-crm', filter: buildFilter() });
+      setCount(data.estimatedCount);
+    } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
     finally { setBusy(false); }
   }
 
-  async function addAll() {
-    if (!preview?.length) return;
+  async function importCrm() {
     setBusy(true); setError(null);
     try {
       const sessionId = await ensureSessionId();
-      const rows = preview.map((c) => ({ phoneNumber: c.phones[0], variables: { full_name: c.name } }));
-      const result = await post<{ inserted: number; duplicated: number; invalid: number }>(
-        `/api/client-session/${sessionId}/data`, { rows, source: 'CRM', appendMode: running ? appendMode : undefined });
-      onAdded(result);
-      setPreview(null); setKeyword('');
+      await post<ImportBatch>(`/api/client-session/${sessionId}/jobs`, {
+        action: 'import-crm', filter: buildFilter(), appendMode: running ? appendMode : undefined,
+      });
+      setEnqueued(true);
+      onAdded({ inserted: 0, duplicated: 0, invalid: 0 }); // để màn cha reload; số thật lấy từ batch
     } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
     finally { setBusy(false); }
   }
@@ -324,36 +415,54 @@ function CrmTab({ ensureSessionId, onAdded, onClose, running, appendMode, setApp
     <div className="flex h-full flex-col p-6">
       <h4 className="mb-1 text-[15px] font-bold">Lấy từ thuộc tính khách hàng (CRM)</h4>
       <p className="mb-4 text-sm text-(--color-muted)">
-        Data được CHỤP tại thời điểm thêm (snapshot) — khách hàng đổi thông tin sau đó không ảnh hưởng phiên.
-        Bộ lọc đầy đủ theo màn contact sẽ nối ở real mode (C-03); mock tìm theo tên/SĐT.
+        Data được CHỤP tại thời điểm nạp (snapshot) — khách hàng đổi thông tin sau đó không ảnh hưởng phiên.
+        Chỉ những biến kịch bản đang cần được lấy sang, không bê cả hồ sơ khách hàng.
       </p>
-      <div className="flex gap-2">
-        <div className="flex flex-1 items-center gap-2 rounded-full bg-(--color-field) px-4 py-2">
-          <span>🔍</span>
-          <input className="w-full bg-transparent text-sm outline-none" placeholder="Tên hoặc số điện thoại khách hàng…"
-            value={keyword} onChange={(e) => setKeyword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} />
-        </div>
-        <Button onClick={search} disabled={busy}>Xem trước</Button>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {CRM_FILTER_FIELDS.map((field) => (
+          <label key={field.key} className="text-sm">
+            <span className="mb-1 block text-xs text-(--color-muted)">{field.label}</span>
+            <input className="w-full rounded-lg border border-(--color-line) bg-(--color-field) px-3 py-2 outline-none"
+              placeholder={field.placeholder}
+              value={raw[field.key] ?? ''}
+              onChange={(e) => { setRaw({ ...raw, [field.key]: e.target.value }); setCount(null); }} />
+          </label>
+        ))}
+        <label className="text-sm">
+          <span className="mb-1 block text-xs text-(--color-muted)">Ngày tạo từ</span>
+          <input type="date" className="w-full rounded-lg border border-(--color-line) bg-(--color-field) px-3 py-2 outline-none"
+            value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setCount(null); }} />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-xs text-(--color-muted)">đến</span>
+          <input type="date" className="w-full rounded-lg border border-(--color-line) bg-(--color-field) px-3 py-2 outline-none"
+            value={dateTo} onChange={(e) => { setDateTo(e.target.value); setCount(null); }} />
+        </label>
       </div>
 
-      {preview && (
-        <div className="mt-4 min-h-0 flex-1 overflow-y-auto rounded-xl border border-(--color-line)">
-          <div className="border-b border-(--color-line) bg-(--color-field) px-4 py-2 text-sm font-semibold">
-            {preview.length} khách hàng khớp bộ lọc
-          </div>
-          {preview.map((c) => (
-            <div key={c.id} className="flex items-center gap-3 border-b border-(--color-line) px-4 py-2.5 text-sm last:border-0">
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-100">👤</span>
-              <span className="font-medium">{c.name}</span>
-              <span className="text-(--color-muted)">{c.phones.join(', ')}</span>
-            </div>
-          ))}
+      <p className="mt-3 text-xs text-(--color-muted)">
+        Để trống tất cả = lấy toàn bộ danh bạ. Chưa có API danh mục tag/nhóm nên tạm nhập ID
+        (lấy từ màn Danh bạ của OmiCRM); khi BE mở API danh mục sẽ đổi thành dropdown.
+      </p>
+
+      {count != null && (
+        <div className="mt-4 rounded-xl border border-(--color-line) bg-(--color-field) px-4 py-3 text-sm">
+          Khớp <b>{count.toLocaleString('vi-VN')}</b> khách hàng.
+          {count > 0 && ' Bấm "Nạp vào phiên" để chạy — việc nạp chạy nền, theo dõi ở khu Xử lý nền.'}
         </div>
       )}
 
-      <div className="mt-auto flex items-center gap-3 border-t border-(--color-line) pt-4">
-        <Button variant="primary" disabled={!preview?.length || busy} onClick={addAll}>
-          Thêm {preview?.length ?? 0} khách hàng vào phiên
+      {enqueued && (
+        <div className="mt-3 rounded-xl border border-(--color-primary) bg-(--color-primary-soft) px-4 py-3 text-sm">
+          Đã xếp hàng nạp danh bạ. Tiến độ và kết quả xem ở khu <b>Xử lý nền</b> của phiên.
+        </div>
+      )}
+
+      <div className="mt-auto flex flex-wrap items-center gap-3 border-t border-(--color-line) pt-4">
+        <Button onClick={preview} disabled={busy}>{busy ? 'Đang đếm…' : 'Xem trước số lượng'}</Button>
+        <Button variant="primary" disabled={busy || !count} onClick={importCrm}>
+          Nạp {count ? count.toLocaleString('vi-VN') : ''} khách hàng vào phiên
         </Button>
         <Button onClick={onClose}>Đóng</Button>
         <AppendModePicker running={running} appendMode={appendMode} setAppendMode={setAppendMode} />

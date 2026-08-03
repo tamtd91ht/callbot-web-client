@@ -6,6 +6,7 @@
  *  - Auth: header Authorization: Bearer <JWT> (Vert.x JWTAuthHandler).
  *  - get-by-id/pause/continue/cancel cần {sessionId, sessionTimeMs} → FE dùng composite id `sid~timeMs`.
  */
+import { headers } from 'next/headers';
 import { GatewayError } from '../gateway';
 import type { ClientSession, ClientSessionStatus, DataRow, SessionCounters } from '@/contracts/types';
 
@@ -15,10 +16,21 @@ export function baseUrl(): string {
   return (process.env.CALLBOT_BASE_URL || 'https://callbot-v2-stg.omicrm.com/call-bot').replace(/\/$/, '');
 }
 
+/** Token ưu tiên từ UI (header x-callbot-token do apiClient đính), fallback env CALLBOT_JWT. */
+export async function resolveJwt(): Promise<string> {
+  let fromUi = '';
+  try {
+    fromUi = (await headers()).get('x-callbot-token') ?? '';
+  } catch {
+    /* gọi ngoài request scope (build/prerender) — dùng env */
+  }
+  return fromUi || process.env.CALLBOT_JWT || '';
+}
+
 export async function callOld<T>(path: string, body: unknown): Promise<T> {
-  const jwt = process.env.CALLBOT_JWT || '';
+  const jwt = await resolveJwt();
   if (!jwt) {
-    throw new GatewayError('CS_UNAUTHORIZED', 'Chưa cấu hình CALLBOT_JWT trong .env — lấy token đăng nhập OmiCRM stg rồi điền vào');
+    throw new GatewayError('CS_UNAUTHORIZED', 'Chưa có token — bấm nút "Token" trên thanh header để dán JWT (đăng nhập call-bot-stg.omicrm.com → DevTools → copy header Authorization)');
   }
   const res = await fetch(`${baseUrl()}${path}`, {
     method: 'POST',
@@ -30,7 +42,7 @@ export async function callOld<T>(path: string, body: unknown): Promise<T> {
     cache: 'no-store',
   });
   if (res.status === 401 || res.status === 403) {
-    throw new GatewayError('CS_UNAUTHORIZED', 'JWT hết hạn hoặc không hợp lệ (401 từ callbot-v2-stg)');
+    throw new GatewayError('CS_UNAUTHORIZED', 'Token hết hạn hoặc không hợp lệ (401 từ callbot-v2-stg) — dán token mới ở nút "Token" trên thanh header');
   }
   const text = await res.text();
   let envelope: { status_code?: number; statusCode?: number; message?: string; payload?: T };

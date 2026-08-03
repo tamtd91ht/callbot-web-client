@@ -65,10 +65,12 @@ Demo luồng 2 phút: tạo phiên → mở chi tiết → paste vài SĐT (có 
 ### Real mode — STG (C-03a, đã tích hợp)
 
 `.env` mặc định đã trỏ **REAL** vào `https://callbot-v2-stg.omicrm.com/call-bot` (lưu ý:
-`call-bot-stg.omicrm.com` là FRONTEND; origin API trích từ config SPA). Chỉ cần điền JWT:
+`call-bot-stg.omicrm.com` là FRONTEND; origin API trích từ config SPA). Chỉ cần dán JWT:
 
 1. Đăng nhập https://call-bot-stg.omicrm.com → DevTools → Network → copy header `Authorization`
-   của request bất kỳ tới `callbot-v2-stg` → dán vào `CALLBOT_JWT` trong `.env`.
+   của request bất kỳ tới `callbot-v2-stg` → bấm nút **Token** trên thanh header của app và dán vào
+   (app không có luồng auth; token lưu localStorage, hết hạn thì mở lại dán token mới — nút tự
+   cảnh báo ⚠ khi thiếu/hết hạn). `CALLBOT_JWT` trong `.env` chỉ là fallback khi UI chưa có token.
 2. `npm run dev` — danh sách/chi tiết/pause/resume/cancel **phiên CŨ** + xem records chạy trên data thật
    (mapping old→new trong `src/bff/real/oldApi.ts`; composite id `sessionId~sessionTimeMs`;
    envelope thật `{status_code: 9999, payload}` đã xử lý; realtime tạm poll 10s).

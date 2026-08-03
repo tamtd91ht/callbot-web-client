@@ -8,11 +8,13 @@ import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { ClientSession, DataRow, SessionCounters } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
-import { get, post, ApiError } from '@/lib/apiClient';
+import { get, post, patch, del, ApiError } from '@/lib/apiClient';
 import { useSessionRealtime } from '@/lib/realtime';
 import { Button, Card } from '@/components/ui';
 import { AddCustomerDrawer } from '@/components/session/AddCustomerDrawer';
 import { SessionDataTable } from '@/components/session/SessionDataTable';
+import { JobsPanel } from '@/components/session/JobsPanel';
+import { ReportPanel } from '@/components/session/ReportPanel';
 
 export default function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -22,11 +24,13 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [live, setLive] = useState<{ totalCalling: number; ccu: string } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dataVersion, setDataVersion] = useState(0);
 
   const reload = useCallback(async () => {
     try {
       setSession(await get<ClientSession>(`/api/client-session/${id}`));
       setRows(await get<DataRow[]>(`/api/client-session/${id}/data`));
+      setDataVersion((v) => v + 1); // báo ReportPanel tải lại số liệu
       setError(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -117,7 +121,29 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
       </Card>
 
       <Card>
-        <SessionDataTable rows={rows} />
+        <ReportPanel sessionId={id} refreshKey={dataVersion} />
+      </Card>
+
+      <Card>
+        <JobsPanel sessionId={id} isDraft={session.status === 'DRAFT'} onFinished={() => void reload()} />
+      </Card>
+
+      <Card>
+        <SessionDataTable
+          rows={rows}
+          onDelete={canAddData ? async (rowIds) => {
+            await del(`/api/client-session/${id}/data`, { rowIds });
+            await reload();
+          } : undefined}
+          onEditRow={canAddData ? async (rowId, phoneNumber) => {
+            await patch(`/api/client-session/${id}/rows`, { rowId, phoneNumber });
+            await reload();
+          } : undefined}
+          onRestoreDuplicate={canAddData ? async (rowId) => {
+            await post(`/api/client-session/${id}/rows`, { rowId });
+            await reload();
+          } : undefined}
+        />
       </Card>
 
       <AddCustomerDrawer open={drawerOpen} initialTab="manual"

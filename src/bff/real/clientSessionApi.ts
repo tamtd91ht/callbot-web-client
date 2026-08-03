@@ -6,7 +6,7 @@
  * Body mirror docs 05 + contracts/types.ts (camelCase, id trong body, toàn POST).
  */
 import { GatewayError } from '../gateway';
-import { baseUrl, callOld } from './oldApi';
+import { baseUrl, callOld, resolveJwt } from './oldApi';
 import type {
   ClientDataSource, ClientRowStatus, ClientSession, ClientSessionStatus,
   ContactSuggestion, CreateSessionRequest, DataRow, DedupeConfig, ImportBatch, RetryConfig,
@@ -206,9 +206,11 @@ export function mapImportBatch(dto: BeImportBatch): ImportBatch {
 
 /** Upload multipart — endpoint duy nhất không phải JSON, nên không đi qua callOld. */
 export async function csUpload<T>(path: string, form: FormData): Promise<T> {
-  const jwt = process.env.CALLBOT_JWT || '';
+  // Dùng CHUNG cách lấy token với callOld: ưu tiên token user dán ở UI, fallback env
+  const jwt = await resolveJwt();
   if (!jwt) {
-    throw new GatewayError('CS_UNAUTHORIZED', 'Chưa cấu hình CALLBOT_JWT trong .env');
+    throw new GatewayError('CS_UNAUTHORIZED',
+      'Chưa có token — bấm nút "Token" trên thanh header để dán JWT');
   }
   const res = await fetch(`${baseUrl()}/client-session${path}`, {
     method: 'POST',

@@ -11,10 +11,12 @@ export function Card({ children, className = '' }: { children: ReactNode; classN
 }
 
 export function Button({
-  children, onClick, variant = 'outline', disabled, type = 'button', className = '',
+  children, onClick, variant = 'outline', disabled, type = 'button', className = '', title,
 }: {
   children: ReactNode; onClick?: () => void; disabled?: boolean;
   variant?: 'primary' | 'outline' | 'ghost' | 'danger'; type?: 'button' | 'submit'; className?: string;
+  /** Tooltip — cần cho các nút hành động mà nhãn ngắn không nói hết hệ quả. */
+  title?: string;
 }) {
   const styles = {
     primary: 'bg-(--color-primary) text-white hover:bg-(--color-primary-dark) border-transparent',
@@ -23,7 +25,7 @@ export function Button({
     danger: 'bg-white text-(--color-danger) border-(--color-line) hover:bg-red-50',
   }[variant];
   return (
-    <button type={type} onClick={onClick} disabled={disabled}
+    <button type={type} onClick={onClick} disabled={disabled} title={title}
       className={`rounded-lg border px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 ${styles} ${className}`}>
       {children}
     </button>

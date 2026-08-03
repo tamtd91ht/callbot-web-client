@@ -19,13 +19,44 @@ const STATUS_TABS = [
 ];
 const PAGE_SIZE = 10;
 
+/** Nhãn tiếng Việt — khớp nhãn BE dùng trong file export để user không thấy 2 cách gọi. */
+const ROW_STATUS_LABELS: Record<string, string> = {
+  STAGED: 'Chờ gọi', DUPLICATE: 'Trùng', INVALID: 'Lỗi dữ liệu',
+  QUEUED: 'Đang vào hàng đợi', DISPATCHED: 'Đã gửi lệnh gọi', DONE: 'Đã xong', REMOVED: 'Đã xoá',
+};
+const CALL_RESULT_LABELS: Record<string, string> = {
+  ANSWERED: 'Nghe máy', NO_ANSWER: 'Không nghe', FAILED: 'Lỗi', CANCELED: 'Đã huỷ',
+};
+const EDITABLE = new Set(['STAGED', 'DUPLICATE', 'INVALID']);
+
 export function SessionDataTable({
-  rows, scriptName, onDelete,
-}: { rows: DataRow[]; scriptName?: string; onDelete?: (rowIds: string[]) => Promise<void> }) {
+  rows, scriptName, onDelete, onEditRow, onRestoreDuplicate,
+}: {
+  rows: DataRow[];
+  scriptName?: string;
+  onDelete?: (rowIds: string[]) => Promise<void>;
+  /** Sửa SĐT 1 dòng — BE tự kiểm tra lại hợp lệ + tính lại trùng cho dòng đó (B7). */
+  onEditRow?: (rowId: string, phoneNumber: string) => Promise<void>;
+  /** Ép dòng trùng về hàng đợi gọi — user chấp nhận gọi cả hai (B7). */
+  onRestoreDuplicate?: (rowId: string) => Promise<void>;
+}) {
   const [statusTab, setStatusTab] = useState('ALL');
   const [source, setSource] = useState('ALL');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const [editing, setEditing] = useState<{ rowId: string; phone: string } | null>(null);
+  const [busyRow, setBusyRow] = useState<string | null>(null);
+  const hasActions = Boolean(onDelete || onEditRow || onRestoreDuplicate);
+
+  async function run(rowId: string, task: () => Promise<void>) {
+    setBusyRow(rowId);
+    try {
+      await task();
+      setEditing(null);
+    } finally {
+      setBusyRow(null);
+    }
+  }
 
   const filtered = useMemo(() => rows
     .filter((r) => r.rowStatus !== 'REMOVED')
@@ -82,7 +113,7 @@ export function SessionDataTable({
               <th className="px-3 py-2 font-semibold">Kết quả gọi</th>
               {scriptName && <th className="px-3 py-2 font-semibold">Tên kịch bản</th>}
               <th className="px-3 py-2 font-semibold">Danh sách biến</th>
-              {onDelete && <th className="px-3 py-2" />}
+              {hasActions && <th className="px-3 py-2" />}
             </tr>
           </thead>
           <tbody>
@@ -93,24 +124,56 @@ export function SessionDataTable({
                   <span className="mr-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-pink-100 align-middle">👤</span>
                   {row.variables?.full_name ?? 'Không xác định'}
                 </td>
-                <td className="px-3 py-2.5">{row.phoneNumber}</td>
+                <td className="px-3 py-2.5">
+                  {editing?.rowId === row.rowId ? (
+                    <input autoFocus className="w-36 rounded-lg border border-(--color-primary) px-2 py-1 text-sm outline-none"
+                      value={editing.phone}
+                      onChange={(e) => setEditing({ rowId: row.rowId, phone: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && onEditRow) void run(row.rowId, () => onEditRow(row.rowId, editing.phone));
+                        if (e.key === 'Escape') setEditing(null);
+                      }} />
+                  ) : row.phoneNumber}
+                </td>
                 <td className="px-3 py-2.5">{SOURCE_LABELS[row.source] ?? row.source}</td>
                 <td className="px-3 py-2.5">
-                  <span className={`rowstatus ${row.rowStatus}`}>{row.rowStatus}</span>
+                  <span className={`rowstatus ${row.rowStatus}`}>{ROW_STATUS_LABELS[row.rowStatus] ?? row.rowStatus}</span>
                   {row.invalidReason && <div className="mt-0.5 text-xs text-(--color-danger)">{row.invalidReason}</div>}
                 </td>
-                <td className="px-3 py-2.5">{row.callResult ?? '—'}</td>
+                <td className="px-3 py-2.5">{row.callResult ? CALL_RESULT_LABELS[row.callResult] ?? row.callResult : '—'}</td>
                 {scriptName && <td className="px-3 py-2.5 text-(--color-link)">{scriptName}</td>}
                 <td className="max-w-56 truncate px-3 py-2.5 text-xs text-(--color-muted)">
                   {Object.entries(row.variables ?? {}).filter(([k]) => !k.startsWith('__'))
                     .map(([k, v]) => `${k}=${v}`).join('; ') || '—'}
                 </td>
-                {onDelete && (
-                  <td className="px-3 py-2.5 text-right">
-                    {(row.rowStatus === 'STAGED' || row.rowStatus === 'DUPLICATE' || row.rowStatus === 'INVALID') && (
-                      <button className="text-(--color-danger) hover:opacity-70" title="Xoá dòng"
-                        onClick={() => onDelete([row.rowId])}>✕</button>
-                    )}
+                {hasActions && (
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                    {/* Dòng đã vào hàng đợi gọi thì BE chặn sửa/xoá — ẩn nút để user không bấm rồi ăn lỗi */}
+                    {EDITABLE.has(row.rowStatus) ? (
+                      <span className="inline-flex items-center gap-2">
+                        {busyRow === row.rowId && <span className="text-xs text-(--color-muted)">…</span>}
+                        {onEditRow && (editing?.rowId === row.rowId ? (
+                          <>
+                            <button className="text-(--color-primary-dark) hover:opacity-70" title="Lưu"
+                              onClick={() => void run(row.rowId, () => onEditRow(row.rowId, editing.phone))}>✓</button>
+                            <button className="text-(--color-muted) hover:opacity-70" title="Bỏ"
+                              onClick={() => setEditing(null)}>↺</button>
+                          </>
+                        ) : (
+                          <button className="text-(--color-link) hover:opacity-70" title="Sửa số điện thoại"
+                            onClick={() => setEditing({ rowId: row.rowId, phone: row.phoneNumber })}>✎</button>
+                        ))}
+                        {onRestoreDuplicate && row.rowStatus === 'DUPLICATE' && (
+                          <button className="text-xs text-(--color-link) hover:opacity-70"
+                            title="Vẫn gọi dòng này (chấp nhận trùng)"
+                            onClick={() => void run(row.rowId, () => onRestoreDuplicate(row.rowId))}>Vẫn gọi</button>
+                        )}
+                        {onDelete && (
+                          <button className="text-(--color-danger) hover:opacity-70" title="Xoá dòng"
+                            onClick={() => void run(row.rowId, () => onDelete([row.rowId]))}>✕</button>
+                        )}
+                      </span>
+                    ) : <span className="text-xs text-(--color-muted)">—</span>}
                   </td>
                 )}
               </tr>
