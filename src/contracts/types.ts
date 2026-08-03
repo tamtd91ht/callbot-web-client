@@ -10,7 +10,10 @@ export type ClientSessionStatus =
 export type ClientRowStatus =
   | 'STAGED' | 'DUPLICATE' | 'INVALID' | 'QUEUED' | 'DISPATCHED' | 'DONE' | 'REMOVED';
 
-export type ClientDataSource = 'MANUAL' | 'EXCEL' | 'CRM' | 'THIRD_PARTY' | 'CLONE';
+export type ClientDataSource =
+  | 'MANUAL' | 'EXCEL' | 'CRM' | 'THIRD_PARTY' | 'CLONE'
+  // nguồn LUỒNG CŨ — chỉ xuất hiện khi real mode xem phiên cũ trên stg (read-only)
+  | 'WEB' | 'API' | 'CAMPAIGN';
 export type DedupeMode = 'NONE' | 'PHONE' | 'FIELD';
 export type RetryTrigger = 'NO_ANSWER' | 'BOT_ACTION';
 export type VariablePriority = 'SESSION_DATA_FIRST' | 'CRM_CONTACT_FIRST';

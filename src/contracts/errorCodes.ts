@@ -18,6 +18,10 @@ export const CS_ERROR_MESSAGES: Record<string, string> = {
   CS_FILE_INVALID_FORMAT: 'File sai định dạng — dùng template .xlsx',
   CS_FILE_TOO_MANY_ROWS: 'File vượt quá 100.000 dòng — tách nhỏ file',
   CS_ROW_NOT_EDITABLE: 'Dòng đã vào hàng đợi gọi — không sửa được',
+  CS_UNAUTHORIZED: 'Chưa đăng nhập hoặc JWT hết hạn — cập nhật CALLBOT_JWT',
+  CS_NOT_READY: 'API luồng phiên client (B8) chưa deploy trên môi trường này',
+  CS_UPSTREAM_ERROR: 'Backend trả lỗi — xem chi tiết trong thông báo',
+  CS_BAD_GATEWAY: 'Không nói chuyện được với backend (response bất thường)',
 };
 
 export function errorMessage(errorCode: string | undefined, fallback: string): string {

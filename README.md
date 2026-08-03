@@ -62,7 +62,18 @@ Demo luồng 2 phút: tạo phiên → mở chi tiết → paste vài SĐT (có 
 → **Submit** → nhìn realtime chạy (mock tick 2s/batch) → thử **Pause/Resume**, nạp thêm data với
 "Chạy ngay" (chen hàng) → phiên tự **COMPLETED** khi hết data.
 
-Flip sang backend thật (sau B8): `.env` → `CALLBOT_MODE=real` + `CALLBOT_BASE_URL` + `CALLBOT_JWT`.
+### Real mode — STG (C-03a, đã tích hợp)
+
+`.env` mặc định đã trỏ **REAL** vào `https://callbot-v2-stg.omicrm.com/call-bot` (lưu ý:
+`call-bot-stg.omicrm.com` là FRONTEND; origin API trích từ config SPA). Chỉ cần điền JWT:
+
+1. Đăng nhập https://call-bot-stg.omicrm.com → DevTools → Network → copy header `Authorization`
+   của request bất kỳ tới `callbot-v2-stg` → dán vào `CALLBOT_JWT` trong `.env`.
+2. `npm run dev` — danh sách/chi tiết/pause/resume/cancel **phiên CŨ** + xem records chạy trên data thật
+   (mapping old→new trong `src/bff/real/oldApi.ts`; composite id `sessionId~sessionTimeMs`;
+   envelope thật `{status_code: 9999, payload}` đã xử lý; realtime tạm poll 10s).
+3. Tạo phiên client / nạp data / submit → UI báo `CS_NOT_READY` cho tới khi backend B8 deploy.
+   Muốn demo luồng tạo phiên: đổi `CALLBOT_MODE=mock`.
 
 ## 4. Roadmap (track C — client)
 
@@ -70,7 +81,8 @@ Flip sang backend thật (sau B8): `.env` → `CALLBOT_MODE=real` + `CALLBOT_BAS
 |---|---|---|
 | C-01 | Khung: contracts + BFF 2 mode + mock simulator + trang skeleton demo trọn luồng | ✅ xong |
 | C-02 | UI thật theo mẫu (user gửi): wizard tạo phiên, màn data (tab Trùng/Lỗi, paging, import Excel/CRM), màn realtime, báo cáo; chọn styling framework | ⬜ chờ UI mẫu |
-| C-03 | Real mode hoàn chỉnh: wire 23 endpoints theo 05, socket.io tới gateway thật, auth flow JWT | ⬜ chờ BE B8 |
+| C-03a | Real mode STG với API CŨ: transport (envelope 9999/JWT/composite id) + list/detail/pause/resume/cancel/records + fallback poll | ✅ xong (cần JWT để test data thật) |
+| C-03b | Real mode đầy đủ: 23 endpoints mới theo 05 (chờ B8), socket.io tới gateway thật, auth flow | ⬜ chờ BE B8 |
 | C-04 | Mock nâng cao khi cần: import Excel giả lập progress, clone phiên, báo cáo/export | ⬜ tuỳ nhu cầu demo |
 
 ## 5. Git

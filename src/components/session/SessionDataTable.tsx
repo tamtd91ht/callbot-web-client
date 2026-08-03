@@ -6,6 +6,8 @@ import { Button } from '../ui';
 
 const SOURCE_LABELS: Record<string, string> = {
   MANUAL: 'Thêm thủ công', EXCEL: 'File Excel', CRM: 'Thuộc tính KH', THIRD_PARTY: 'Bên thứ 3', CLONE: 'Clone',
+  // nguồn luồng CŨ (real mode xem phiên cũ trên stg)
+  WEB: 'Web (luồng cũ)', API: 'API (luồng cũ)', CAMPAIGN: 'Campaign (luồng cũ)',
 };
 const STATUS_TABS = [
   { key: 'ALL', label: 'Tất cả' },

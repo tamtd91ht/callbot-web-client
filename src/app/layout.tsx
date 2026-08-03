@@ -16,7 +16,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <span className="text-sm text-white/70">· Client Session</span>
           </div>
           <span className="rounded-full bg-white/15 px-3 py-0.5 text-xs">
-            mode: {process.env.CALLBOT_MODE === 'real' ? 'REAL' : 'MOCK'}
+            {process.env.CALLBOT_MODE === 'real'
+              ? `REAL · ${(() => { try { return new URL(process.env.CALLBOT_BASE_URL ?? '').host; } catch { return 'stg'; } })()}`
+              : 'MOCK'}
           </span>
         </header>
         <main className="mx-auto max-w-350 px-4 py-6">{children}</main>

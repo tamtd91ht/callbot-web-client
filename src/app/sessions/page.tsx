@@ -8,9 +8,15 @@ import { Button, Card } from '@/components/ui';
 
 export default function SessionsPage() {
   const [sessions, setSessions] = useState<ClientSession[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    setSessions(await get<ClientSession[]>('/api/client-session'));
+    try {
+      setSessions(await get<ClientSession[]>('/api/client-session'));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }, []);
 
   useEffect(() => {
@@ -30,6 +36,11 @@ export default function SessionsPage() {
           <Button variant="primary" className="px-6">+ Tạo phiên</Button>
         </Link>
       </div>
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-800">
+          {error}
+        </div>
+      )}
 
       <table className="w-full text-sm">
         <thead>

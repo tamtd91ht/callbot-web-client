@@ -24,8 +24,13 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    setSession(await get<ClientSession>(`/api/client-session/${id}`));
-    setRows(await get<DataRow[]>(`/api/client-session/${id}/data`));
+    try {
+      setSession(await get<ClientSession>(`/api/client-session/${id}`));
+      setRows(await get<DataRow[]>(`/api/client-session/${id}/data`));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    }
   }, [id]);
 
   useEffect(() => { void reload(); }, [reload]);
@@ -43,6 +48,13 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
       if (event.data.status === 'COMPLETED' || event.data.status === 'CANCELED') void reload();
     }
   });
+
+  // Real mode (C-03a): chưa nối socket gateway — mất realtime thì poll 10s (số liệu tuyệt đối nên tự khớp)
+  useEffect(() => {
+    if (connected) return;
+    const timer = setInterval(() => void reload(), 10_000);
+    return () => clearInterval(timer);
+  }, [connected, reload]);
 
   async function act(action: 'submit' | 'pause' | 'resume' | 'cancel') {
     setError(null);
