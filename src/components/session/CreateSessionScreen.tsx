@@ -14,9 +14,9 @@ import { AddCustomerDrawer } from './AddCustomerDrawer';
 import { DistributionModal, distributionSummary, type DistributionValue } from './DistributionModal';
 import { SessionDataTable } from './SessionDataTable';
 import { VariablePriorityChips } from './VariablePriorityChips';
-import { CUSTOMER_QUOTA, PURPOSES, SCRIPTS, SIP_NUMBERS, VARIABLE_SOURCES, VOICES } from './catalogs';
-import { ScriptField, SipNumbersField, scriptLabel } from './CatalogFields';
-import { useCatalogOverrides } from '@/lib/catalogOverrides';
+import { CUSTOMER_QUOTA, PURPOSES, SCRIPTS, SIP_NUMBERS, VARIABLE_SOURCES } from './catalogs';
+import { ScriptField, SipNumbersField, VoiceField, scriptLabel } from './CatalogFields';
+import { useCatalogs } from '@/lib/useCatalogs';
 import { IS_REAL } from '@/lib/sessionApi';
 
 interface FormState {
@@ -66,7 +66,7 @@ export function CreateSessionScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const creating = useRef<Promise<string> | null>(null);
-  const savedCatalogs = useCatalogOverrides();
+  const catalogs = useCatalogs();
 
   const patch = useCallback((update: Partial<FormState>) => setForm((f) => ({ ...f, ...update })), []);
 
@@ -142,7 +142,7 @@ export function CreateSessionScreen() {
   const summary = distributionSummary(form.distribution);
   const activeRows = useMemo(() => rows.filter((r) => r.rowStatus !== 'REMOVED'), [rows]);
   const countBySource = (src: string) => activeRows.filter((r) => r.source === src).length;
-  const scriptName = scriptLabel(form.scriptUuid, savedCatalogs.scripts);
+  const scriptName = scriptLabel(form.scriptUuid, catalogs.scripts);
 
   return (
     <div className="pb-24">
@@ -184,20 +184,13 @@ export function CreateSessionScreen() {
                 onChange={(e) => patch({ startTimeLocal: e.target.value })} />
             </Field>
 
-            <SipNumbersField value={form.sipNumbers} onChange={(sipNumbers) => patch({ sipNumbers })} />
+            <SipNumbersField value={form.sipNumbers} onChange={(sipNumbers) => patch({ sipNumbers })} catalogs={catalogs} />
 
             <h3 className="pt-2 text-[15px] font-bold">Thành phần cuộc gọi</h3>
 
-            <ScriptField value={form.scriptUuid} onChange={(scriptUuid) => patch({ scriptUuid })} />
+            <ScriptField value={form.scriptUuid} onChange={(scriptUuid) => patch({ scriptUuid })} catalogs={catalogs} />
 
-            <Field label="Giọng đọc (ưu tiên hơn giọng trong kịch bản)">
-              <div className="flex items-center gap-2">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-(--color-navy) text-xs text-white">▶</span>
-                <select className={inputClass} value={form.voiceOverride} onChange={(e) => patch({ voiceOverride: e.target.value })}>
-                  {VOICES.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
-                </select>
-              </div>
-            </Field>
+            <VoiceField value={form.voiceOverride} onChange={(voiceOverride) => patch({ voiceOverride })} catalogs={catalogs} />
 
             {/* Card tóm tắt phân bổ — như template */}
             <div className="rounded-(--radius-field) bg-(--color-field) px-4 py-3">
