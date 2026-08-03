@@ -1,4 +1,14 @@
-/** Danh mục mock cho màn Lên phiên — real mode sẽ lấy từ API (đầu số, kịch bản, giọng đọc). */
+/**
+ * Danh mục cho màn Lên phiên.
+ *
+ * `SCRIPTS` và `SIP_NUMBERS` là **MOCK** — chúng là dữ liệu của tenant trên backend, app này chưa có
+ * API danh mục để lấy về. Ở real mode phải tự nhập giá trị thật qua UI (lưu localStorage,
+ * xem `lib/catalogOverrides.ts`), nếu không backend trả `CS_SCRIPT_NOT_FOUND` hoặc gọi ra số không tồn tại.
+ *
+ * `VOICES` thì KHÔNG mock: đây là toàn bộ enum `Voice` thật của BE, copy từ
+ * `vihat/domain/vo/Voice.java`. Gửi value không khớp enum thì Jackson fail parse và BE bỏ qua
+ * TOÀN BỘ config phức (mất luôn sipNumbers) — nên đừng tự sửa tay các value dưới đây.
+ */
 import type { SipNumber } from '@/contracts/types';
 
 export const PURPOSES = ['Auto Call', 'Nhắc phí', 'CSKH', 'Khảo sát', 'Telesale'];
@@ -15,13 +25,18 @@ export const SCRIPTS = [
   { uuid: 'uuid-demo-khaosat', name: 'CallBot - Khảo sát CSAT' },
 ];
 
-/** Mirror enum Voice của BE (docs 01) — value gửi xuống = tên enum. */
+/** Toàn bộ enum Voice của BE (vihat/domain/vo/Voice.java) — value gửi xuống = tên enum. */
 export const VOICES = [
   { value: '', label: 'Theo kịch bản (không override)' },
-  { value: 'northern_female_ngocanh', label: 'Ngọc Anh — Tiếng Việt, Nữ, miền Bắc' },
-  { value: 'southern_female_honganh', label: 'Hồng Anh — Tiếng Việt, Nữ, miền Nam' },
-  { value: 'southern_male_tienhuy', label: 'Tiến Huy — Tiếng Việt, Nam, miền Nam' },
-  { value: 'northern_male_anhkiet', label: 'Anh Kiệt — Tiếng Việt, Nam, miền Bắc' },
+  { value: 'northern_female_ngocanh', label: 'Ngọc Anh — Nữ, miền Bắc' },
+  { value: 'northern_male_anhkiet', label: 'Anh Kiệt — Nam, miền Bắc' },
+  { value: 'southern_female_honganh', label: 'Hồng Anh — Nữ, miền Nam' },
+  { value: 'southern_female_khangan', label: 'Khả Ngân — Nữ, miền Nam' },
+  { value: 'southern_male_tienhuy', label: 'Tiến Huy — Nam, miền Nam' },
+  { value: 'central_female_ngoclam', label: 'Ngọc Lam — Nữ, miền Trung' },
+  { value: 'central_male_ngocqui', label: 'Ngọc Quí — Nam, miền Trung' },
+  { value: 'yangon_female_zinthu', label: 'Zin Thu — Tiếng Miến (Yangon), Nữ' },
+  { value: 'haitian_female', label: 'Haitian — Nữ' },
 ];
 
 /** 3 nguồn của chips "Thứ tự ưu tiên giá trị biến" (map template img_3). */

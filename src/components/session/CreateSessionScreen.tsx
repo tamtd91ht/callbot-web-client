@@ -15,6 +15,9 @@ import { DistributionModal, distributionSummary, type DistributionValue } from '
 import { SessionDataTable } from './SessionDataTable';
 import { VariablePriorityChips } from './VariablePriorityChips';
 import { CUSTOMER_QUOTA, PURPOSES, SCRIPTS, SIP_NUMBERS, VARIABLE_SOURCES, VOICES } from './catalogs';
+import { ScriptField, SipNumbersField, scriptLabel } from './CatalogFields';
+import { useCatalogOverrides } from '@/lib/catalogOverrides';
+import { IS_REAL } from '@/lib/sessionApi';
 
 interface FormState {
   name: string;
@@ -34,8 +37,10 @@ function defaultForm(): FormState {
     name: '',
     purpose: PURPOSES[0],
     startTimeLocal: toLocalInput(in5m),
-    sipNumbers: [SIP_NUMBERS[0]],
-    scriptUuid: SCRIPTS[0].uuid,
+    // Real mode KHÔNG mặc định giá trị mock: chọn sẵn rồi submit là ăn CS_SCRIPT_NOT_FOUND
+    // hoặc gọi ra số không thuộc doanh nghiệp. Để trống để UI buộc chọn giá trị thật.
+    sipNumbers: IS_REAL ? [] : [SIP_NUMBERS[0]],
+    scriptUuid: IS_REAL ? '' : SCRIPTS[0].uuid,
     voiceOverride: '',
     distribution: {
       batchSize: 10, batchIntervalSeconds: 30, timeSlots: [],
@@ -61,6 +66,7 @@ export function CreateSessionScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const creating = useRef<Promise<string> | null>(null);
+  const savedCatalogs = useCatalogOverrides();
 
   const patch = useCallback((update: Partial<FormState>) => setForm((f) => ({ ...f, ...update })), []);
 
@@ -136,7 +142,7 @@ export function CreateSessionScreen() {
   const summary = distributionSummary(form.distribution);
   const activeRows = useMemo(() => rows.filter((r) => r.rowStatus !== 'REMOVED'), [rows]);
   const countBySource = (src: string) => activeRows.filter((r) => r.source === src).length;
-  const scriptName = SCRIPTS.find((s) => s.uuid === form.scriptUuid)?.name;
+  const scriptName = scriptLabel(form.scriptUuid, savedCatalogs.scripts);
 
   return (
     <div className="pb-24">
@@ -178,38 +184,11 @@ export function CreateSessionScreen() {
                 onChange={(e) => patch({ startTimeLocal: e.target.value })} />
             </Field>
 
-            <Field label="Đầu số (chọn nhiều — phân bổ theo nhà mạng)" required highlight>
-              <div className="flex flex-wrap gap-2 pt-1">
-                {SIP_NUMBERS.map((sip) => {
-                  const selected = form.sipNumbers.some((s) => s.number === sip.number);
-                  return (
-                    <button key={sip.number} type="button"
-                      onClick={() => patch({
-                        sipNumbers: selected
-                          ? form.sipNumbers.filter((s) => s.number !== sip.number)
-                          : [...form.sipNumbers, sip],
-                      })}
-                      className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${
-                        selected ? 'border-(--color-primary) bg-(--color-primary-soft) text-(--color-primary-dark)' : 'border-(--color-line) bg-white'}`}>
-                      {sip.number} <span className="text-xs text-(--color-muted)">({sip.network})</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </Field>
+            <SipNumbersField value={form.sipNumbers} onChange={(sipNumbers) => patch({ sipNumbers })} />
 
             <h3 className="pt-2 text-[15px] font-bold">Thành phần cuộc gọi</h3>
 
-            <Field label="Kịch bản AI Callbot" required>
-              <div className="flex items-center gap-2">
-                <select className={inputClass} value={form.scriptUuid} onChange={(e) => patch({ scriptUuid: e.target.value })}>
-                  {SCRIPTS.map((s) => <option key={s.uuid} value={s.uuid}>{s.name}</option>)}
-                </select>
-                <span className="shrink-0 cursor-not-allowed text-sm text-(--color-link) opacity-60" title="Màn kịch bản — ngoài phạm vi demo">
-                  Xem chi tiết ▾
-                </span>
-              </div>
-            </Field>
+            <ScriptField value={form.scriptUuid} onChange={(scriptUuid) => patch({ scriptUuid })} />
 
             <Field label="Giọng đọc (ưu tiên hơn giọng trong kịch bản)">
               <div className="flex items-center gap-2">
