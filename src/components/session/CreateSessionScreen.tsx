@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { ClientSession, DataRow, SipNumber, UpdateSessionRequest } from '@/contracts/types';
 import { ApiError, get, post, api } from '@/lib/apiClient';
+import { sessionApi } from '@/lib/sessionApi';
 import { Button, Card, Field, inputClass } from '../ui';
 import { AddCustomerDrawer } from './AddCustomerDrawer';
 import { DistributionModal, distributionSummary, type DistributionValue } from './DistributionModal';
@@ -63,7 +64,8 @@ export function CreateSessionScreen() {
 
   const patch = useCallback((update: Partial<FormState>) => setForm((f) => ({ ...f, ...update })), []);
 
-  function toRequest(f: FormState): UpdateSessionRequest {
+  /** name luôn có giá trị (fallback theo thời gian) nên dùng được cho cả create và update. */
+  function toRequest(f: FormState): UpdateSessionRequest & { name: string; sipNumbers: SipNumber[] } {
     return {
       name: f.name || `Phiên ${new Date().toLocaleString('vi-VN')}`,
       purpose: f.purpose,
@@ -83,7 +85,7 @@ export function CreateSessionScreen() {
   const ensureSessionId = useCallback(async (): Promise<string> => {
     if (session) return session.id;
     if (!creating.current) {
-      creating.current = post<ClientSession>('/api/client-session', toRequest(form)).then((s) => {
+      creating.current = sessionApi.create(toRequest(form)).then((s) => {
         setSession(s);
         return s.id;
       }).catch((e) => { creating.current = null; throw e; });
@@ -94,16 +96,14 @@ export function CreateSessionScreen() {
 
   const refreshRows = useCallback(async () => {
     if (!session) return;
-    setRows(await get<DataRow[]>(`/api/client-session/${session.id}/data`));
+    setRows(await sessionApi.searchRows(session.id));
   }, [session]);
 
   useEffect(() => { void refreshRows(); }, [refreshRows]);
 
   async function saveConfig(): Promise<string> {
     const id = await ensureSessionId();
-    const updated = await api<ClientSession>(`/api/client-session/${id}`, {
-      method: 'PATCH', body: JSON.stringify(toRequest(form)),
-    });
+    const updated = await sessionApi.update(id, toRequest(form));
     setSession(updated);
     return id;
   }
@@ -121,7 +121,7 @@ export function CreateSessionScreen() {
     setBusy(true); setError(null);
     try {
       const id = await saveConfig();
-      await post(`/api/client-session/${id}/submit`);
+      await sessionApi.action(id, 'submit');
       router.push(`/sessions/${id}`);
     } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
     finally { setBusy(false); }
@@ -129,7 +129,7 @@ export function CreateSessionScreen() {
 
   async function deleteRows(rowIds: string[]) {
     if (!session) return;
-    await api(`/api/client-session/${session.id}/data`, { method: 'DELETE', body: JSON.stringify({ rowIds }) });
+    await sessionApi.removeRows(session.id, rowIds);
     await refreshRows();
   }
 

@@ -8,7 +8,8 @@ import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { ClientSession, DataRow, SessionCounters } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
-import { get, post, patch, del, ApiError } from '@/lib/apiClient';
+import { ApiError } from '@/lib/apiClient';
+import { sessionApi } from '@/lib/sessionApi';
 import { useSessionRealtime } from '@/lib/realtime';
 import { Button, Card } from '@/components/ui';
 import { AddCustomerDrawer } from '@/components/session/AddCustomerDrawer';
@@ -28,8 +29,8 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
 
   const reload = useCallback(async () => {
     try {
-      setSession(await get<ClientSession>(`/api/client-session/${id}`));
-      setRows(await get<DataRow[]>(`/api/client-session/${id}/data`));
+      setSession(await sessionApi.getById(id));
+      setRows(await sessionApi.searchRows(id));
       setDataVersion((v) => v + 1); // báo ReportPanel tải lại số liệu
       setError(null);
     } catch (e) {
@@ -63,7 +64,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   async function act(action: 'submit' | 'pause' | 'resume' | 'cancel') {
     setError(null);
     try {
-      setSession(await post<ClientSession>(`/api/client-session/${id}/${action}`));
+      setSession(await sessionApi.action(id, action));
       await reload();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -132,15 +133,15 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
         <SessionDataTable
           rows={rows}
           onDelete={canAddData ? async (rowIds) => {
-            await del(`/api/client-session/${id}/data`, { rowIds });
+            await sessionApi.removeRows(id, rowIds);
             await reload();
           } : undefined}
           onEditRow={canAddData ? async (rowId, phoneNumber) => {
-            await patch(`/api/client-session/${id}/rows`, { rowId, phoneNumber });
+            await sessionApi.updateRow(id, rowId, phoneNumber);
             await reload();
           } : undefined}
           onRestoreDuplicate={canAddData ? async (rowId) => {
-            await post(`/api/client-session/${id}/rows`, { rowId });
+            await sessionApi.restoreDuplicate(id, rowId);
             await reload();
           } : undefined}
         />

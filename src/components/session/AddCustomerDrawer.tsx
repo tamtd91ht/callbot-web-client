@@ -12,6 +12,7 @@ import type {
   ImportBatch, ImportExcelResult,
 } from '@/contracts/types';
 import { ApiError, api, get, post } from '@/lib/apiClient';
+import { sessionApi } from '@/lib/sessionApi';
 import { Button, Drawer, Tabs, inputClass } from '../ui';
 import { COUNTRY_CODE_OPTIONS, type CountryCodeOption, applyCountryCode } from './catalogs';
 
@@ -93,7 +94,7 @@ function ManualTab({ ensureSessionId, onAdded, onClose, running, appendMode, set
     if (debounce.current) clearTimeout(debounce.current);
     if (!query.trim()) { setSuggestions([]); return; }
     debounce.current = setTimeout(async () => {
-      try { setSuggestions(await get<ContactSuggestion[]>(`/api/contacts/search?q=${encodeURIComponent(query)}`)); }
+      try { setSuggestions(await sessionApi.searchContacts(query)); }
       catch { setSuggestions([]); }
     }, 250);
   }, [query]);
@@ -116,8 +117,7 @@ function ManualTab({ ensureSessionId, onAdded, onClose, running, appendMode, set
         phoneNumber: applyCountryCode(s.phone, countryCode, customCode),
         variables: { ...(s.variables ?? {}), ...(s.name && s.name !== 'Không xác định' ? { full_name: s.name } : {}) },
       }));
-      const result = await post<{ inserted: number; duplicated: number; invalid: number }>(
-        `/api/client-session/${sessionId}/data`, { rows, source: 'MANUAL', appendMode: running ? appendMode : undefined });
+      const result = await sessionApi.addRows(sessionId, rows, 'MANUAL', running ? appendMode : undefined);
       onAdded(result);
       setStaged([]);
     } catch (e) {
@@ -244,13 +244,7 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
     setBusy(true); setError(null); setResult(null); setPendingBatch(null);
     try {
       const sessionId = await ensureSessionId();
-      const form = new FormData();
-      form.append('file', file);
-      if (running) form.append('appendMode', appendMode);
-      // client CHỈ gửi FormData; BFF parse (mock) hoặc đẩy nguyên file xuống BE (real)
-      const data = await api<ImportExcelResult>(`/api/client-session/${sessionId}/data/import-excel`, {
-        method: 'POST', body: form, headers: undefined,
-      });
+      const data = await sessionApi.importExcel(sessionId, file, running ? appendMode : undefined);
       if (data.pending && data.importBatchId) {
         // Real mode: BE parse nền → theo dõi batch cho tới khi xong mới có số liệu
         setPendingBatch({ sessionId, batchId: data.importBatchId });
@@ -269,7 +263,7 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
     let stopped = false;
     const timer = setInterval(async () => {
       try {
-        const batches = await get<ImportBatch[]>(`/api/client-session/${pendingBatch.sessionId}/jobs`);
+        const batches = await sessionApi.listJobs(pendingBatch.sessionId);
         const batch = batches.find((b) => b.id === pendingBatch.batchId);
         if (!batch || stopped) return;
         setProgress(batch);
@@ -391,9 +385,7 @@ function CrmTab({ ensureSessionId, onAdded, onClose, running, appendMode, setApp
     setBusy(true); setError(null); setEnqueued(false);
     try {
       const sessionId = await ensureSessionId();
-      const data = await post<{ estimatedCount: number }>(
-        `/api/client-session/${sessionId}/jobs`, { action: 'preview-crm', filter: buildFilter() });
-      setCount(data.estimatedCount);
+      setCount(await sessionApi.previewCrm(sessionId, buildFilter()));
     } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }
     finally { setBusy(false); }
   }
@@ -402,9 +394,7 @@ function CrmTab({ ensureSessionId, onAdded, onClose, running, appendMode, setApp
     setBusy(true); setError(null);
     try {
       const sessionId = await ensureSessionId();
-      await post<ImportBatch>(`/api/client-session/${sessionId}/jobs`, {
-        action: 'import-crm', filter: buildFilter(), appendMode: running ? appendMode : undefined,
-      });
+      await sessionApi.importCrm(sessionId, buildFilter(), running ? appendMode : undefined);
       setEnqueued(true);
       onAdded({ inserted: 0, duplicated: 0, invalid: 0 }); // để màn cha reload; số thật lấy từ batch
     } catch (e) { setError(e instanceof ApiError ? e.message : String(e)); }

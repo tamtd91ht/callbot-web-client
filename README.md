@@ -9,28 +9,31 @@ FE mô phỏng và tích hợp luồng **Phiên Callbot từ Client**. Chạy đ
 
 ## 1. Kiến trúc & quyết định (AD-C)
 
+**Đổi kiến trúc 2026-08-04 (quyết định owner):** real mode trình duyệt **gọi THẲNG** callbot-service
+stg, không qua BFF nữa — để Network tab thấy đúng domain thật và bớt một chặng. BFF chỉ còn phục vụ
+mock mode.
+
 ```
-Browser ──fetch──▶ Next.js Route Handlers (/app/api/**)  ◀── BFF, JWT chỉ ở đây
-                        │
-                        ▼  CallbotGateway (interface duy nhất)
-        ┌───────────────┴────────────────┐
-   MockGateway (mặc định)           RealGateway (CALLBOT_MODE=real)
-   simulator in-memory:             proxy REST → callbot-service
-   state machine + dispatcher       theo docs 05 (chờ BE B8)
-   tick + retry + counters
-        │
-        ▼ realtime
-   SSE /api/.../events              FE nối socket gateway TRỰC TIẾP
-   (mock only)                      (/call_bot, room=tenantId) — ticket C-03
+REAL  Browser ──fetch(Bearer token)──▶ https://callbot-v2-stg.omicrm.com/call-bot/...
+      (token dán ở UI, lưu localStorage; BE cho phép CORS *)
+
+MOCK  Browser ──fetch──▶ Next.js Route Handlers (/app/api/**) ──▶ MockGateway
+                                                                 simulator in-memory:
+                                                                 state machine + dispatcher
+                                                                 tick + retry + counters
+      realtime: SSE /api/.../events (mock only)
 ```
+
+`src/lib/sessionApi.ts` là **facade duy nhất** UI dùng: mỗi nghiệp vụ tự chọn đường real/mock.
+UI không tự dựng URL — đổi endpoint hay đổi mode chỉ sửa 1 file.
 
 | # | Quyết định | Lý do |
 |---|---|---|
-| AD-C1 | BFF = **Next.js Route Handlers** (không service riêng) | 1 deployable; JWT/secret không bao giờ xuống browser; đủ cho aggregate + mode switch |
-| AD-C2 | `CallbotGateway` interface + 2 impl **mock/real**, switch bằng `CALLBOT_MODE` | FE code 1 lần; mock bám sát guard/error thật để flip không bất ngờ |
-| AD-C3 | Realtime trừu tượng qua hook `useSessionRealtime`: mock=SSE từ BFF, real=socket.io trực tiếp | màn hình không đổi code khi flip; socket thật không cần proxy (gateway đã có) |
-| AD-C4 | `src/contracts/*` = mirror TS của docs 05/09 — nguồn sự thật FE | contract đổi → sửa 1 chỗ, TS bắt hết chỗ vỡ |
-| AD-C5 | **Chưa chọn UI framework/styling** — skeleton CSS thuần | chờ UI mẫu (ticket C-02) rồi quyết Tailwind/AntD/... một lần |
+| AD-C1 | ~~BFF cho mọi call~~ → **real gọi thẳng BE, BFF chỉ cho mock** (2026-08-04) | thấy domain thật khi debug, bớt 1 chặng; đánh đổi: token nằm ở browser và logic map envelope/mã lỗi chạy phía client |
+| AD-C2 | Facade `sessionApi` thay cho `CallbotGateway` 2 impl; mock vẫn giữ nguyên guard/error như BE | FE code 1 lần; mock bám sát lỗi thật để flip không bất ngờ |
+| AD-C3 | Realtime: mock=SSE từ BFF; real tạm **poll 10s** (số tuyệt đối nên luôn khớp), socket.io thật = ticket C-03c | không nối SSE ở real mode vì SSE đó chỉ có dữ liệu simulator |
+| AD-C4 | `src/contracts/*` = mirror TS của docs 05/09; `contracts/mappers.ts` THUẦN (không import server) | dùng được ở cả browser và BFF, không có 2 bản logic tự trôi khỏi nhau |
+| AD-C5 | Styling = **Tailwind CSS** (chốt ở C-02a theo template OmiCall) | template có sẵn tokens; không cần component lib nặng |
 
 Nguyên tắc bất di bất dịch (từ docs 09): **counters là SỐ TUYỆT ĐỐI — FE không bao giờ tự cộng dồn từ event**.
 
@@ -39,22 +42,26 @@ Nguyên tắc bất di bất dịch (từ docs 09): **counters là SỐ TUYỆT 
 ```
 src/
 ├── contracts/          # MIRROR contract BE: types, events, errorCodes (CS_* → message UX)
-├── bff/
-│   ├── gateway.ts      # interface CallbotGateway + getGateway() theo CALLBOT_MODE
-│   ├── http.ts         # envelope {code,message,data} — giữ đúng format BE
-│   ├── mock/           # store (globalThis, sống qua HMR) + simulator (tick dispatcher,
-│   │                   #   batch theo priority, chen hàng RUN_NOW, retry NO_ANSWER, DRAIN→COMPLETED)
-│   └── real/           # proxy REST → callbot-service (skeleton, bật khi B8 xong)
-├── app/api/client-session/**   # BFF routes: CRUD phiên, actions, data, SSE events
-├── app/sessions/**              # trang skeleton: list + detail realtime (UI thật ở C-02)
-└── lib/                # apiClient (bóc envelope, ném ApiError kèm CS_*) + useSessionRealtime
+├── contracts/mappers.ts  # mapper BE→FE THUẦN (không import server) — dùng ở cả browser lẫn BFF
+├── bff/                  # CHỈ CHO MOCK MODE
+│   ├── gateway.ts        # getGateway() → mockGateway
+│   ├── http.ts           # envelope {code,message,data}
+│   └── mock/             # store (globalThis, sống qua HMR) + simulator (tick dispatcher,
+│                         #   batch theo priority, chen hàng RUN_NOW, retry NO_ANSWER, DRAIN→COMPLETED)
+├── app/api/client-session/**   # routes mock: CRUD phiên, actions, data, jobs, report, SSE
+├── app/sessions/**              # list + tạo phiên + chi tiết (báo cáo, job nền, bảng data)
+└── lib/
+    ├── sessionApi.ts     # FACADE: real gọi thẳng BE / mock qua /api/* — UI chỉ dùng file này
+    ├── token.ts          # JWT dán tay ở UI (localStorage) + TokenConfig trên header
+    ├── apiClient.ts      # fetch /api/* của BFF (bóc envelope, ném ApiError kèm CS_*)
+    └── realtime.ts       # useSessionRealtime: SSE ở mock, no-op ở real (C-03c)
 ```
 
 ## 3. Chạy
 
 ```bash
 npm install
-cp .env.example .env   # mặc định CALLBOT_MODE=mock — không cần backend
+cp .env.example .env   # NEXT_PUBLIC_CALLBOT_MODE=mock — không cần backend
 npm run dev            # http://localhost:3000
 ```
 
@@ -75,7 +82,7 @@ Demo luồng 2 phút: tạo phiên → mở chi tiết → paste vài SĐT (có 
    (mapping old→new trong `src/bff/real/oldApi.ts`; composite id `sessionId~sessionTimeMs`;
    envelope thật `{status_code: 9999, payload}` đã xử lý; realtime tạm poll 10s).
 3. Tạo phiên client / nạp data / submit → UI báo `CS_NOT_READY` cho tới khi backend B8 deploy.
-   Muốn demo luồng tạo phiên: đổi `CALLBOT_MODE=mock`.
+   Muốn demo không cần backend: đổi `NEXT_PUBLIC_CALLBOT_MODE=mock`.
 
 ## 4. Roadmap (track C — client)
 

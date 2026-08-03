@@ -57,8 +57,12 @@ export interface CallbotGateway {
 }
 
 import { mockGateway } from './mock/mockGateway';
-import { realGateway } from './real/realGateway';
 
+/**
+ * BFF giờ CHỈ phục vụ mock mode: real mode trình duyệt gọi thẳng callbot-service stg
+ * (quyết định owner 2026-08-04 — xem lib/sessionApi.ts). Giữ 1 đường duy nhất cho real
+ * để không có 2 bản logic map envelope/mã lỗi tự trôi khỏi nhau.
+ */
 export function getGateway(): CallbotGateway {
-  return process.env.CALLBOT_MODE === 'real' ? realGateway : mockGateway;
+  return mockGateway;
 }

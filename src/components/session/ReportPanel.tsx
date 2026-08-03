@@ -6,7 +6,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { SessionReport } from '@/contracts/types';
-import { get, ApiError } from '@/lib/apiClient';
+import { ApiError } from '@/lib/apiClient';
+import { sessionApi } from '@/lib/sessionApi';
 import { Button } from '../ui';
 
 const ROW_STATUS_LABELS: Record<string, string> = {
@@ -28,7 +29,7 @@ export function ReportPanel({ sessionId, refreshKey }: { sessionId: string; refr
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setReport(await get<SessionReport>(`/api/client-session/${sessionId}/report`));
+      setReport(await sessionApi.report(sessionId));
       setError(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));

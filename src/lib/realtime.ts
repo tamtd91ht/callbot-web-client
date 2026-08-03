@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { SessionEvent } from '@/contracts/events';
+import { IS_REAL } from './sessionApi';
 
 export function useSessionRealtime(
   clientSessionId: string | null,
@@ -18,6 +19,12 @@ export function useSessionRealtime(
 
   useEffect(() => {
     if (!clientSessionId) return;
+    // Real mode: SSE của BFF chỉ có dữ liệu simulator → nối làm gì cũng vô nghĩa.
+    // Socket.io thật là ticket C-03c; tới lúc đó màn hình tự poll 10s (số tuyệt đối nên luôn khớp).
+    if (IS_REAL) {
+      setConnected(false);
+      return;
+    }
     const source = new EventSource(`/api/client-session/${clientSessionId}/events`);
     source.onopen = () => setConnected(true);
     source.onerror = () => setConnected(false);

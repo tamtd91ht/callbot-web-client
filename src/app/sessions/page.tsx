@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import type { ClientSession } from '@/contracts/types';
 import { get } from '@/lib/apiClient';
+import { sessionApi } from '@/lib/sessionApi';
 import { Button, Card } from '@/components/ui';
 
 export default function SessionsPage() {
@@ -12,7 +13,7 @@ export default function SessionsPage() {
 
   const reload = useCallback(async () => {
     try {
-      setSessions(await get<ClientSession[]>('/api/client-session'));
+      setSessions(await sessionApi.list());
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

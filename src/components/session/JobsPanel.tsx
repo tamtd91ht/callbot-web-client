@@ -6,7 +6,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { ImportBatch } from '@/contracts/types';
-import { get, post, ApiError } from '@/lib/apiClient';
+import { ApiError } from '@/lib/apiClient';
+import { sessionApi } from '@/lib/sessionApi';
 import { Button } from '../ui';
 
 const TYPE_LABELS: Record<string, string> = {
@@ -28,7 +29,7 @@ export function JobsPanel({
 
   const reload = useCallback(async () => {
     try {
-      setBatches(await get<ImportBatch[]>(`/api/client-session/${sessionId}/jobs`));
+      setBatches(await sessionApi.listJobs(sessionId));
       setError(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
@@ -49,7 +50,7 @@ export function JobsPanel({
   async function trigger(action: 'recheck' | 'export') {
     setBusy(true); setError(null);
     try {
-      await post<ImportBatch>(`/api/client-session/${sessionId}/jobs`, { action });
+      await (action === 'recheck' ? sessionApi.recheckDedupe(sessionId) : sessionApi.exportData(sessionId));
       await reload();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));

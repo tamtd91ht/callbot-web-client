@@ -1,10 +1,9 @@
 /**
- * Import Excel — client CHỈ gửi FormData, không parse gì (quyết định user C-02a).
- * Hai đường tuỳ mode:
- *  - MOCK: Route Handler (Node runtime) tự đọc .xlsx bằng SheetJS rồi đổ vào simulator.
- *    Giới hạn demo 5MB / 10.000 dòng.
- *  - REAL: đẩy nguyên file xuống endpoint B5 của BE (parse SAX streaming, file lỗi, chạy nền,
- *    20MB / 100.000 dòng) → trả `{importBatchId, pending:true}`, UI theo dõi qua /import-batch.
+ * Import Excel cho MOCK MODE: Route Handler (Node runtime) đọc .xlsx bằng SheetJS rồi đổ vào
+ * simulator. Giới hạn demo 5MB / 10.000 dòng.
+ *
+ * Real mode KHÔNG đi qua đây: trình duyệt upload thẳng lên endpoint B5 của BE
+ * (parse SAX streaming, file dòng lỗi, chạy nền, 20MB / 100.000 dòng) — xem lib/sessionApi.ts.
  * Format: cột SĐT nhận nhiều tên (phone/sdt/số...), các cột còn lại = biến.
  */
 import * as XLSX from 'xlsx';
@@ -28,12 +27,6 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     }
     const appendModeRaw = form.get('appendMode');
     const mode = appendModeRaw === 'RUN_NOW' ? 'RUN_NOW' : appendModeRaw === 'RUN_AFTER' ? 'RUN_AFTER' : undefined;
-
-    // REAL MODE: BE có endpoint import-excel riêng (B5) — parse streaming + file lỗi + chạy nền.
-    // Đẩy nguyên file xuống thay vì parse ở đây: BFF không nên gánh file 20MB/100k dòng.
-    if (process.env.CALLBOT_MODE === 'real') {
-      return ok(await getGateway().importExcel(id, file, mode));
-    }
 
     if (file.size > MAX_FILE_BYTES) {
       throw new GatewayError('CS_FILE_TOO_LARGE', 'File vượt 5MB (giới hạn demo mock)');
