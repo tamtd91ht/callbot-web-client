@@ -29,6 +29,7 @@ export interface BeClientSession {
   scriptUuid?: string;
   voiceOverride?: string | null;
   retryConfig?: RetryConfig | null;
+  ringTimeoutSeconds?: number | null;
   batchSize?: number;
   batchIntervalSeconds?: number;
   variablePriority?: VariablePriority;
@@ -178,6 +179,7 @@ export function mapClientSession(dto: BeClientSession): ClientSession {
     scriptUuid: dto.scriptUuid,
     voiceOverride: dto.voiceOverride ?? null,
     retryConfig: dto.retryConfig ?? null,
+    ringTimeoutSeconds: dto.ringTimeoutSeconds ?? null,
     batchSize: dto.batchSize ?? 50,
     batchIntervalSeconds: dto.batchIntervalSeconds ?? 30,
     variablePriority: dto.variablePriority,

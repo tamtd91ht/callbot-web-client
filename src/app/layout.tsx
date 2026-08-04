@@ -17,10 +17,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <span className="text-sm text-white/70">· Client Session</span>
           </div>
           <div className="flex items-center gap-2">
-            {process.env.CALLBOT_MODE === 'real' && <TokenConfig />}
+            {/* NEXT_PUBLIC_CALLBOT_MODE là biến quyết định mode của cả app (IS_REAL trong
+                lib/sessionApi.ts) — đừng gate bằng CALLBOT_MODE server-side, lệch nhau là
+                mất nút Token trong khi app vẫn gọi thẳng BE. */}
+            {process.env.NEXT_PUBLIC_CALLBOT_MODE === 'real' && <TokenConfig />}
             <span className="rounded-full bg-white/15 px-3 py-0.5 text-xs">
-              {process.env.CALLBOT_MODE === 'real'
-                ? `REAL · ${(() => { try { return new URL(process.env.CALLBOT_BASE_URL ?? '').host; } catch { return 'stg'; } })()}`
+              {process.env.NEXT_PUBLIC_CALLBOT_MODE === 'real'
+                ? `REAL · ${(() => { try { return new URL(process.env.NEXT_PUBLIC_CALLBOT_BASE_URL ?? '').host; } catch { return 'stg'; } })()}`
                 : 'MOCK'}
             </span>
           </div>

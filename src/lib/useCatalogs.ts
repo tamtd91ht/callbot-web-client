@@ -1,18 +1,21 @@
 'use client';
 /**
- * Nguồn danh mục cho màn Lên phiên, theo thứ tự ưu tiên:
- *   1. API thật (real mode)      — 3 gateway OmiCRM, xem `catalogApi.ts`
- *   2. Giá trị user tự nhập      — localStorage, vẫn giữ làm đường thoát khi API lỗi/thiếu quyền
- *   3. Mock                      — chỉ dùng ở mock mode; ở real mode hiện kèm nhãn "mock"
+ * Danh mục cho màn Lên phiên — real mode lấy DUY NHẤT từ 3 gateway OmiCRM
+ * (đầu số / kịch bản / giọng đọc, xem `catalogApi.ts`; curl gốc ở
+ * `cloud-vihat-saas-omicrm-callbot-service/docs/related-api/*.txt`).
  *
- * Vì sao giữ cả 3: API danh mục nằm ở service khác (chatbot-gateway, pbx) nên có thể 401/500 độc lập
- * với callbot-service. Khi đó user vẫn phải tạo được phiên bằng cách dán tay UUID/đầu số,
- * thay vì bị chặn cứng.
+ * Không còn nhánh nhập tay/localStorage: giá trị gõ tay sai (scriptUuid không tồn tại,
+ * số không thuộc doanh nghiệp) chỉ đẩy lỗi xuống lúc submit/gọi, khó lần hơn nhiều.
+ * API lỗi thì UI hiện lỗi theo từng danh mục + nút thử lại.
+ *
+ * Mock mode không gọi API — field tự dùng danh mục demo trong `components/session/catalogs.ts`.
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { SipNumber } from '@/contracts/types';
-import { CatalogError, fetchScripts, fetchSipNumbers, fetchVoices, type VoiceOption } from './catalogApi';
-import { useCatalogOverrides, type ScriptOption } from './catalogOverrides';
+import {
+  CatalogError, fetchScripts, fetchSipNumbers, fetchVoices,
+  type ScriptOption, type VoiceOption,
+} from './catalogApi';
 import { IS_REAL } from './sessionApi';
 import { getToken, TOKEN_CHANGED_EVENT } from './token';
 
@@ -20,8 +23,6 @@ export interface CatalogState {
   scripts: ScriptOption[];
   sipNumbers: SipNumber[];
   voices: VoiceOption[];
-  /** true khi danh sách đến từ API thật (dùng để ẩn nhãn "mock"). */
-  fromApi: { scripts: boolean; sipNumbers: boolean; voices: boolean };
   loading: boolean;
   /** Lỗi theo từng danh mục — 3 API độc lập nên 1 cái chết không được che 2 cái kia. */
   errors: { scripts?: string; sipNumbers?: string; voices?: string };
@@ -33,7 +34,6 @@ function messageOf(e: unknown): string {
 }
 
 export function useCatalogs(): CatalogState {
-  const overrides = useCatalogOverrides();
   const [api, setApi] = useState<{
     scripts: ScriptOption[]; sipNumbers: SipNumber[]; voices: VoiceOption[];
   }>({ scripts: [], sipNumbers: [], voices: [] });
@@ -80,22 +80,5 @@ export function useCatalogs(): CatalogState {
     return () => window.removeEventListener(TOKEN_CHANGED_EVENT, onToken);
   }, [reload]);
 
-  const mergeById = <T,>(apiItems: T[], saved: T[], key: (item: T) => string): T[] => {
-    const seen = new Set(apiItems.map(key));
-    return [...apiItems, ...saved.filter((s) => !seen.has(key(s)))];
-  };
-
-  return {
-    scripts: mergeById(api.scripts, overrides.scripts, (s) => s.uuid),
-    sipNumbers: mergeById(api.sipNumbers, overrides.sipNumbers, (s) => s.number),
-    voices: mergeById(api.voices, overrides.voices.map((v) => ({ value: v, label: v })), (v) => v.value),
-    fromApi: {
-      scripts: api.scripts.length > 0,
-      sipNumbers: api.sipNumbers.length > 0,
-      voices: api.voices.length > 0,
-    },
-    loading,
-    errors,
-    reload,
-  };
+  return { ...api, loading, errors, reload };
 }

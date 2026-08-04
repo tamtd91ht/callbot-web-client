@@ -1,9 +1,8 @@
 /**
  * Danh mục cho màn Lên phiên.
  *
- * `SCRIPTS` và `SIP_NUMBERS` là **MOCK** — chúng là dữ liệu của tenant trên backend, app này chưa có
- * API danh mục để lấy về. Ở real mode phải tự nhập giá trị thật qua UI (lưu localStorage,
- * xem `lib/catalogOverrides.ts`), nếu không backend trả `CS_SCRIPT_NOT_FOUND` hoặc gọi ra số không tồn tại.
+ * `SCRIPTS` và `SIP_NUMBERS` là **MOCK**, chỉ dùng ở mock mode. Real mode lấy danh mục thật
+ * từ 3 gateway OmiCRM (xem `lib/catalogApi.ts`) — không có đường nhập tay.
  *
  * `VOICES` thì KHÔNG mock: đây là toàn bộ enum `Voice` thật của BE, copy từ
  * `vihat/domain/vo/Voice.java`. Gửi value không khớp enum thì Jackson fail parse và BE bỏ qua

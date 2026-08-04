@@ -19,7 +19,11 @@ export type RetryTrigger = 'NO_ANSWER' | 'BOT_ACTION';
 export type VariablePriority = 'SESSION_DATA_FIRST' | 'CRM_CONTACT_FIRST';
 export type AppendMode = 'RUN_NOW' | 'RUN_AFTER';
 
-export interface TimeSlot { from: string; to: string; } // "HH:mm"
+/**
+ * [FR-004] Khung giờ + ngày trong tuần PER-SLOT. daysOfWeek theo ISO: 1=T2 … 7=CN;
+ * không gửi / rỗng = mọi ngày (BE tương thích ngược — đừng dùng [] với nghĩa "slot tắt").
+ */
+export interface TimeSlot { from: string; to: string; daysOfWeek?: number[] } // "HH:mm"
 
 export interface SipNumber {
   number: string;
@@ -67,6 +71,8 @@ export interface ClientSession {
   scriptUuid?: string;
   voiceOverride?: string | null;
   retryConfig?: RetryConfig | null;
+  /** [FR-008] Ngắt cuộc nếu không kết nối sau N giây (5–60); null = mặc định tổng đài (60s). */
+  ringTimeoutSeconds?: number | null;
   batchSize: number;
   batchIntervalSeconds: number;
   variablePriority?: VariablePriority;
@@ -114,6 +120,8 @@ export interface CreateSessionRequest {
   scriptUuid?: string;
   voiceOverride?: string | null;
   retryConfig?: RetryConfig | null;
+  /** [FR-008] 5–60 giây; không gửi = mặc định tổng đài. */
+  ringTimeoutSeconds?: number | null;
   batchSize?: number;
   batchIntervalSeconds?: number;
   variablePriority?: VariablePriority;

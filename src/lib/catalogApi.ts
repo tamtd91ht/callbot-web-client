@@ -15,8 +15,9 @@
  * đưa danh sách rỗng. Khi chốt được shape thật thì rút gọn {@link pickList}/các `pick*` lại.
  */
 import type { SipNumber } from '@/contracts/types';
-import type { ScriptOption } from './catalogOverrides';
 import { getToken, tokenTenantId } from './token';
+
+export interface ScriptOption { uuid: string; name: string }
 
 const CHATBOT_BASE = (process.env.NEXT_PUBLIC_CHATBOT_GATEWAY_URL
   || 'https://chatbot-gateway-v1-stg.omicrm.com').replace(/\/$/, '');

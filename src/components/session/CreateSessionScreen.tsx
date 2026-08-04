@@ -14,7 +14,7 @@ import { AddCustomerDrawer } from './AddCustomerDrawer';
 import { DistributionModal, distributionSummary, type DistributionValue } from './DistributionModal';
 import { SessionDataTable } from './SessionDataTable';
 import { VariablePriorityChips } from './VariablePriorityChips';
-import { CUSTOMER_QUOTA, PURPOSES, SCRIPTS, SIP_NUMBERS, VARIABLE_SOURCES } from './catalogs';
+import { CUSTOMER_QUOTA, PURPOSES, SCRIPTS, VARIABLE_SOURCES } from './catalogs';
 import { ScriptField, SipNumbersField, VoiceField, scriptLabel } from './CatalogFields';
 import { useCatalogs } from '@/lib/useCatalogs';
 import { IS_REAL } from '@/lib/sessionApi';
@@ -26,6 +26,8 @@ interface FormState {
   sipNumbers: SipNumber[];
   scriptUuid: string;
   voiceOverride: string;
+  /** [FR-008] '' = theo mặc định tổng đài (60s). */
+  ringTimeoutSeconds: string;
   distribution: DistributionValue;
   variableOrder: string[];
 }
@@ -37,11 +39,13 @@ function defaultForm(): FormState {
     name: '',
     purpose: PURPOSES[0],
     startTimeLocal: toLocalInput(in5m),
-    // Real mode KHÔNG mặc định giá trị mock: chọn sẵn rồi submit là ăn CS_SCRIPT_NOT_FOUND
-    // hoặc gọi ra số không thuộc doanh nghiệp. Để trống để UI buộc chọn giá trị thật.
-    sipNumbers: IS_REAL ? [] : [SIP_NUMBERS[0]],
+    // Đầu số mặc định TRỐNG ở mọi mode (quyết định owner 2026-08-04) — người dùng tự mở
+    // dropdown chọn. Kịch bản real mode cũng để trống (chọn sẵn mock là ăn CS_SCRIPT_NOT_FOUND).
+    sipNumbers: [],
     scriptUuid: IS_REAL ? '' : SCRIPTS[0].uuid,
     voiceOverride: '',
+    ringTimeoutSeconds: '30', // mặc định MAFC theo mockup FR-008
+
     distribution: {
       batchSize: 10, batchIntervalSeconds: 30, timeSlots: [],
       retryConfig: null,
@@ -79,6 +83,7 @@ export function CreateSessionScreen() {
       sipNumbers: f.sipNumbers,
       scriptUuid: f.scriptUuid,
       voiceOverride: f.voiceOverride || null,
+      ringTimeoutSeconds: f.ringTimeoutSeconds.trim() ? Number(f.ringTimeoutSeconds) : null,
       batchSize: f.distribution.batchSize,
       batchIntervalSeconds: f.distribution.batchIntervalSeconds,
       timeSlots: f.distribution.timeSlots,
@@ -185,6 +190,18 @@ export function CreateSessionScreen() {
             </Field>
 
             <SipNumbersField value={form.sipNumbers} onChange={(sipNumbers) => patch({ sipNumbers })} catalogs={catalogs} />
+
+            {/* [FR-008] mockup: block "Thời gian chờ kết nối tối đa" ngay dưới Đầu số */}
+            <Field label="Thời gian chờ kết nối tối đa">
+              <div className="flex items-center gap-2">
+                <input type="number" min={5} max={60} className={`${inputClass} max-w-28`}
+                  value={form.ringTimeoutSeconds}
+                  onChange={(e) => patch({ ringTimeoutSeconds: e.target.value })} />
+                <span className="text-sm text-(--color-muted)">
+                  giây — ngắt cuộc nếu không kết nối được (5–60; bỏ trống = mặc định tổng đài 60s)
+                </span>
+              </div>
+            </Field>
 
             <h3 className="pt-2 text-[15px] font-bold">Thành phần cuộc gọi</h3>
 
