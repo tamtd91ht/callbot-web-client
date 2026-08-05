@@ -99,8 +99,11 @@ export async function fetchSipNumbers(): Promise<CatalogResult<SipNumber>> {
     .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
     .map((row) => ({
       number: str(row, 'number', 'phone_number', 'phoneNumber', 'sip_number', 'sipNumber', 'name'),
-      network: str(row, 'network', 'network_name', 'telco', 'provider', 'carrier') || undefined,
-      gateway: str(row, 'gateway', 'gateway_name', 'gateway_uuid', 'gatewayName') || undefined,
+      // network = nhà mạng (dùng phân bổ theo mạng của khách).
+      // gateway ← field `provider` của API (owner xác nhận 2026-08-05): KHÔNG dùng `provider`
+      // cho network, vì BE truyền thẳng gateway xuống tổng đài — thiếu là không route được cuộc.
+      network: str(row, 'network', 'network_name', 'telco', 'carrier') || undefined,
+      gateway: str(row, 'provider', 'gateway', 'gateway_name', 'gateway_uuid', 'gatewayName') || undefined,
       isRoutingNumber: Boolean(row.is_routing_number ?? row.isRoutingNumber ?? false),
     }))
     .filter((s) => s.number);
