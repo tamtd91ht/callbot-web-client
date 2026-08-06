@@ -10,14 +10,15 @@
  * UI KHÔNG tự dựng URL: mọi endpoint nằm ở đây để đổi mode/đổi path chỉ sửa 1 chỗ.
  */
 import type {
-  AppendMode, ClientSession, ContactSuggestion, CreateSessionRequest, CrmContactFilter, DataRow,
-  ImportBatch, ImportExcelResult, SessionReport, UpdateSessionRequest,
+  AppendMode, CallbotScript, CallRecord, CallRecordFilter, ClientSession, CloneSessionRequest,
+  CloneSessionResult, ContactSuggestion, CreateSessionRequest, CrmContactFilter, DataRow,
+  ImportBatch, ImportExcelResult, Paginated, SessionReport, UpdateSessionRequest,
 } from '@/contracts/types';
 import {
-  isLegacyId, mapClientRow, mapClientSession, mapContactSuggestion, mapImportBatch,
-  mapOldRecord, mapOldSession, parseCompositeId, sanitizeConfig, SUCCESS_CODE,
+  isLegacyId, mapCallRecord, mapClientRow, mapClientSession, mapContactSuggestion, mapImportBatch,
+  mapOldRecord, mapOldSession, mapScript, parseCompositeId, sanitizeConfig, SUCCESS_CODE,
   type BeClientSession, type BeDataPage, type BeDataRow, type BeImportBatch, type BeIngestResult,
-  type OldPaginated, type OldRecordDTO, type OldSessionDTO,
+  type BeRecordDTO, type BeScriptDTO, type OldPaginated, type OldRecordDTO, type OldSessionDTO,
 } from '@/contracts/mappers';
 import { errorMessage } from '@/contracts/errorCodes';
 import { ApiError, api, get, post, patch, del } from './apiClient';
@@ -133,8 +134,16 @@ export const sessionApi = {
     return mapClientSession(await cs<BeClientSession>('/update', { id, ...sanitizeConfig(patchBody) }));
   },
 
-  async action(id: string, action: 'submit' | 'pause' | 'resume' | 'cancel'): Promise<ClientSession> {
-    if (!IS_REAL) return post<ClientSession>(`/api/client-session/${id}/${action}`);
+  /**
+   * `cause` chỉ có nghĩa với pause/cancel (BE đọc key `cause`); submit/resume bỏ qua.
+   * BE KHÔNG hỗ trợ pause kèm thời lượng như AutoCall (pauseUntilTime) — xem mục nợ BE.
+   */
+  async action(
+    id: string,
+    action: 'submit' | 'pause' | 'resume' | 'cancel',
+    cause?: string,
+  ): Promise<ClientSession> {
+    if (!IS_REAL) return post<ClientSession>(`/api/client-session/${id}/${action}`, cause ? { cause } : undefined);
     if (isLegacyId(id)) {
       if (action === 'submit') throw new ApiError('CS_INVALID_STATE', 'Phiên luồng cũ không có bước submit');
       const { sessionId, sessionTimeMs } = parseCompositeId(id);
@@ -142,7 +151,9 @@ export const sessionApi = {
       await beCall<boolean>(path, { sessionId, sessionTimeMs });
       return this.getById(id); // old API xử lý async, đọc lại trạng thái
     }
-    return mapClientSession(await cs<BeClientSession>(`/${action}`, { id }));
+    const body: Record<string, unknown> = { id };
+    if (cause && (action === 'pause' || action === 'cancel')) body.cause = cause;
+    return mapClientSession(await cs<BeClientSession>(`/${action}`, body));
   },
 
   async searchRows(id: string): Promise<DataRow[]> {
@@ -260,5 +271,91 @@ export const sessionApi = {
     const raw = await cs<Array<{ id?: string; name?: string; phones?: string[] }>>(
       '/contact/suggest', { keyword: query });
     return (raw ?? []).map(mapContactSuggestion);
+  },
+
+  /**
+   * Nhân bản phiên — tương đương "Gọi lại phiên" của AutoCall (4 cloneTypes).
+   * Trả về phiên DRAFT mới + job nền copy data (nếu có mang data sang).
+   */
+  async clone(req: CloneSessionRequest): Promise<CloneSessionResult> {
+    if (!IS_REAL) return post<CloneSessionResult>('/api/client-session/clone', req);
+    requireClientSession(req.sourceSessionId, 'Nhân bản phiên');
+    const raw = await cs<{ session?: BeClientSession; importBatchId?: string | null }>('/clone', {
+      sourceSessionId: req.sourceSessionId,
+      copyConfig: req.copyConfig,
+      dataFilter: req.dataFilter ?? null,
+      overrides: req.overrides ? sanitizeConfig(req.overrides) : null,
+      name: req.name,
+    });
+    if (!raw?.session) throw new ApiError('CS_UPSTREAM_ERROR', 'Backend không trả về phiên sau khi nhân bản');
+    return { session: mapClientSession(raw.session), importBatchId: raw.importBatchId ?? null };
+  },
+
+  /**
+   * Lịch sử cuộc gọi thực tế của phiên (khác data staging: 1 dòng data retry 3 lần → 3 record).
+   * Dùng endpoint luồng cũ /record/search vì luồng client mới CHƯA có endpoint riêng —
+   * runtimeSessionId ("cs_<id>") chính là cầu nối sang engine cũ.
+   */
+  async searchRecords(session: ClientSession, filter: CallRecordFilter = {}): Promise<Paginated<CallRecord>> {
+    const page = filter.page ?? 1;
+    const size = filter.size ?? 20;
+    if (!IS_REAL) {
+      return get<Paginated<CallRecord>>(
+        `/api/client-session/${session.id}/records?page=${page}&size=${size}`
+        + `${filter.statuses?.length ? `&statuses=${filter.statuses.join(',')}` : ''}`
+        + `${filter.keyword ? `&keyword=${encodeURIComponent(filter.keyword)}` : ''}`,
+      );
+    }
+    // Phiên luồng cũ dùng id gốc; phiên mới phải dùng runtimeSessionId (chưa submit thì chưa có record)
+    const runtimeId = isLegacyId(session.id)
+      ? parseCompositeId(session.id).sessionId
+      : session.runtimeSessionId;
+    if (!runtimeId) return { items: [], total: 0 };
+
+    const beFilter: Record<string, unknown> = { sessionIds: [runtimeId] };
+    if (filter.statuses?.length) beFilter.statuses = filter.statuses;
+    if (filter.sipNumbers?.length) beFilter.sipNumbers = filter.sipNumbers;
+    if (filter.keyword?.trim()) beFilter.keyword = filter.keyword.trim();
+
+    const result = await beCall<OldPaginated<BeRecordDTO>>('/record/search', { filter: beFilter, page, size });
+    return {
+      items: (result.items ?? []).map(mapCallRecord),
+      total: result.total_items ?? result.totalItems ?? (result.items ?? []).length,
+    };
+  },
+
+  /** Chi tiết 1 cuộc gọi (transcript, phân tích) — cần cả recordId và callIndexTimeMs. */
+  async recordCallInfo(recordId: string, callIndexTimeMs: number | null): Promise<unknown> {
+    if (!IS_REAL) return get<unknown>(`/api/records/${recordId}`);
+    return beCall<unknown>('/record/call-info', { recordId, callIndexTimeMs });
+  },
+
+  /** Danh sách kịch bản (bản mới nhất) để chọn khi tạo phiên. */
+  async listScripts(keyword?: string): Promise<CallbotScript[]> {
+    if (!IS_REAL) return get<CallbotScript[]>('/api/scripts');
+    const raw = await beCall<BeScriptDTO[] | OldPaginated<BeScriptDTO>>(
+      '/filter/script/newest-version/list',
+      { page: 1, size: 100, ...(keyword?.trim() ? { keyword: keyword.trim() } : {}) },
+    );
+    const items = Array.isArray(raw) ? raw : raw?.items ?? [];
+    return items.map(mapScript);
+  },
+
+  /** Tra tên/biến kịch bản đã lưu trên phiên (drawer "Xem chi tiết kịch bản"). */
+  async scriptsByUuids(uuids: string[]): Promise<CallbotScript[]> {
+    if (uuids.length === 0) return [];
+    if (!IS_REAL) return get<CallbotScript[]>(`/api/scripts?uuids=${uuids.join(',')}`);
+    const raw = await beCall<BeScriptDTO[] | OldPaginated<BeScriptDTO>>(
+      '/filter/script/list-by-uuids', { uuids });
+    const items = Array.isArray(raw) ? raw : raw?.items ?? [];
+    return items.map(mapScript);
+  },
+
+  /** Link tải file Excel template dựng theo biến của kịch bản đã chọn. */
+  async importTemplateUrl(id: string): Promise<string | null> {
+    if (!IS_REAL) return null;
+    requireClientSession(id, 'Tải template Excel');
+    const raw = await cs<{ url?: string }>('/data/import-template', { id });
+    return raw?.url ?? null;
   },
 };

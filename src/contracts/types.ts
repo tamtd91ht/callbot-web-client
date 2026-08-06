@@ -211,6 +211,89 @@ export interface SessionReport {
   counters?: SessionCounters;
 }
 
+// ===== Kịch bản callbot =====
+
+/**
+ * 1 kịch bản (bản mới nhất) — từ POST /call-bot/filter/script/newest-version/list.
+ * LƯU Ý: khi tạo phiên phải gửi `uuid` (ổn định qua các version), KHÔNG gửi `id`.
+ */
+export interface CallbotScript {
+  id: string;
+  uuid: string;
+  name: string;
+  version?: number;
+  isNewestVersion?: boolean;
+  /** Biến kịch bản đòi hỏi — nguồn để dựng cột file Excel nạp data. */
+  variables?: ScriptVariable[];
+}
+
+export interface ScriptVariable {
+  fieldCode: string;
+  fieldName?: string;
+  type?: string;
+}
+
+// ===== Lịch sử cuộc gọi (per-record) =====
+
+export type RecordStatus = 'PROCESSING' | 'ANSWERED' | 'NO_ANSWER' | 'FAILED' | 'CANCELED';
+
+/** 1 cuộc gọi đã phát sinh — POST /call-bot/record/search. */
+export interface CallRecord {
+  recordId: string;
+  sessionId?: string;
+  phoneNumber: string;
+  sipNumber?: string | null;
+  status: RecordStatus;
+  /** Thời lượng đàm thoại (giây). */
+  duration?: number | null;
+  /** Lần gọi thứ mấy — >1 là do retry. */
+  callIndex?: number | null;
+  callIndexTimeMs?: number | null;
+  /** Mã + diễn giải lỗi khi status = FAILED. */
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  recordingUrl?: string | null;
+  variables?: Record<string, string>;
+  startTimeMs?: number | null;
+  endTimeMs?: number | null;
+}
+
+export interface CallRecordFilter {
+  statuses?: RecordStatus[];
+  sipNumbers?: string[];
+  keyword?: string;
+  page?: number;
+  size?: number;
+}
+
+export interface Paginated<T> {
+  items: T[];
+  total: number;
+}
+
+// ===== Clone phiên =====
+
+/**
+ * 4 kiểu nhân bản — bám đúng cloneTypes của AutoCall (web-v2 MarketingData.cloneTypes):
+ * chỉ cấu hình / toàn bộ KH / KH gọi thất bại / theo trạng thái cuộc gọi.
+ */
+export type CloneMode = 'CONFIG_ONLY' | 'ALL_CUSTOMERS' | 'FAILED_ONLY' | 'BY_CALL_STATUS';
+
+export interface CloneSessionRequest {
+  sourceSessionId: string;
+  copyConfig: boolean;
+  /** Lọc data mang sang; rỗng = không mang data nào. */
+  dataFilter?: { callStatuses?: string[] } | null;
+  overrides?: Partial<CreateSessionRequest> | null;
+  name?: string;
+}
+
+export interface CloneSessionResult {
+  session: ClientSession;
+  /** Job nền copy data — theo dõi qua /import-batch/search. */
+  importBatchId?: string | null;
+}
+
 // ===== Envelope (BE dùng {code,message,data} — BFF giữ nguyên) =====
 
 export interface ApiEnvelope<T> {

@@ -3,13 +3,21 @@ import { fail, ok } from '@/bff/http';
 
 const ACTIONS: SessionAction[] = ['submit', 'pause', 'resume', 'cancel'];
 
-export async function POST(_request: Request, ctx: { params: Promise<{ id: string; action: string }> }) {
+export async function POST(request: Request, ctx: { params: Promise<{ id: string; action: string }> }) {
   try {
     const { id, action } = await ctx.params;
     if (!ACTIONS.includes(action as SessionAction)) {
       return fail(new Error(`Unknown action: ${action}`));
     }
-    return ok(await getGateway().doAction(id, action as SessionAction));
+    // pause/cancel có thể kèm lý do; body rỗng là bình thường với submit/resume
+    let cause: string | undefined;
+    try {
+      const body = await request.json() as { cause?: string } | null;
+      cause = body?.cause;
+    } catch {
+      /* không có body JSON — bỏ qua */
+    }
+    return ok(await getGateway().doAction(id, action as SessionAction, cause));
   } catch (e) {
     return fail(e);
   }

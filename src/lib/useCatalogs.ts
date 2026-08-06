@@ -1,42 +1,77 @@
 'use client';
 /**
- * Danh mục cho màn Lên phiên — real mode lấy DUY NHẤT từ 3 gateway OmiCRM
- * (đầu số / kịch bản / giọng đọc, xem `catalogApi.ts`; curl gốc ở
- * `cloud-vihat-saas-omicrm-callbot-service/docs/related-api/*.txt`).
+ * Danh mục cho màn Lên phiên — real mode lấy từ các gateway OmiCRM, đúng những API mà app
+ * OMICRM thật (web-v2) dùng cho luồng tạo phiên AutoCall:
  *
- * Không còn nhánh nhập tay/localStorage: giá trị gõ tay sai (scriptUuid không tồn tại,
- * số không thuộc doanh nghiệp) chỉ đẩy lỗi xuống lúc submit/gọi, khó lần hơn nhiều.
- * API lỗi thì UI hiện lỗi theo từng danh mục + nút thử lại.
+ *   đầu số        GET  {pbx}/public_number_of_tenant/list_active      (lọc allow_call_out)
+ *   kịch bản      GET  {chatbot}/callbot/script/list-by-tenant/{tenantId}
+ *   giọng đọc     POST {chatbot}/bot-accent/list-all
+ *   mục đích gọi  POST {cdr}/call_transaction/purpose/get_list        ← danh mục tenant tự định nghĩa
+ *   thẻ           POST {tenantConfig}/tag/search-all                 ← lọc KH theo thuộc tính
+ *   nhóm KH       POST {tenantConfig}/contact-categories/search-all
+ *   loại hình     POST {tenantConfig}/business/search-all
+ *   prefix mã QG  GET  {tenant}/phone_prefix/get_all
+ *
+ * Không có nhánh nhập tay: giá trị gõ tay sai (scriptUuid không tồn tại, số không thuộc doanh
+ * nghiệp, id thẻ bịa) chỉ đẩy lỗi xuống lúc submit/gọi, khó lần hơn nhiều. API lỗi thì UI hiện
+ * lỗi THEO TỪNG danh mục + nút thử lại — một API chết không được che các API còn lại.
  *
  * Mock mode không gọi API — field tự dùng danh mục demo trong `components/session/catalogs.ts`.
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { SipNumber } from '@/contracts/types';
 import {
-  CatalogError, fetchScripts, fetchSipNumbers, fetchVoices,
-  type ScriptOption, type VoiceOption,
+  CatalogError, fetchCallPurposes, fetchClassify, fetchPhonePrefixes, fetchScripts,
+  fetchSipNumbers, fetchVoices,
+  type CallPurposeOption, type ClassifyOption, type ScriptOption, type VoiceOption,
 } from './catalogApi';
 import { IS_REAL } from './sessionApi';
 import { getToken, TOKEN_CHANGED_EVENT } from './token';
+
+export type CatalogKey =
+  | 'scripts' | 'sipNumbers' | 'voices' | 'callPurposes'
+  | 'tags' | 'categories' | 'businesses' | 'phonePrefixes';
 
 export interface CatalogState {
   scripts: ScriptOption[];
   sipNumbers: SipNumber[];
   voices: VoiceOption[];
+  callPurposes: CallPurposeOption[];
+  tags: ClassifyOption[];
+  categories: ClassifyOption[];
+  businesses: ClassifyOption[];
+  phonePrefixes: string[];
   loading: boolean;
-  /** Lỗi theo từng danh mục — 3 API độc lập nên 1 cái chết không được che 2 cái kia. */
-  errors: { scripts?: string; sipNumbers?: string; voices?: string };
+  /** Lỗi theo từng danh mục — các API độc lập nên 1 cái chết không được che những cái kia. */
+  errors: Partial<Record<CatalogKey, string>>;
   reload: () => void;
 }
+
+/** Nhãn tiếng Việt để ghép câu lỗi. */
+const CATALOG_LABELS: Record<CatalogKey, string> = {
+  scripts: 'Kịch bản',
+  sipNumbers: 'Đầu số',
+  voices: 'Giọng đọc',
+  callPurposes: 'Mục đích cuộc gọi',
+  tags: 'Thẻ',
+  categories: 'Nhóm khách hàng',
+  businesses: 'Loại hình',
+  phonePrefixes: 'Mã quốc gia',
+};
+
+type CatalogData = Omit<CatalogState, 'loading' | 'errors' | 'reload'>;
+
+const EMPTY: CatalogData = {
+  scripts: [], sipNumbers: [], voices: [], callPurposes: [],
+  tags: [], categories: [], businesses: [], phonePrefixes: [],
+};
 
 function messageOf(e: unknown): string {
   return e instanceof CatalogError || e instanceof Error ? e.message : String(e);
 }
 
 export function useCatalogs(): CatalogState {
-  const [api, setApi] = useState<{
-    scripts: ScriptOption[]; sipNumbers: SipNumber[]; voices: VoiceOption[];
-  }>({ scripts: [], sipNumbers: [], voices: [] });
+  const [data, setData] = useState<CatalogData>(EMPTY);
   const [errors, setErrors] = useState<CatalogState['errors']>({});
   const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
@@ -46,30 +81,46 @@ export function useCatalogs(): CatalogState {
     if (!IS_REAL || !getToken()) return; // mock mode / chưa dán token thì không gọi API
     let alive = true;
     setLoading(true);
+
     void (async () => {
-      const [scripts, sipNumbers, voices] = await Promise.allSettled([
-        fetchScripts(), fetchSipNumbers(), fetchVoices(),
-      ]);
+      // allSettled: danh mục nào lỗi thì chỉ danh mục đó báo lỗi, phần còn lại vẫn dùng được
+      const [scripts, sipNumbers, voices, callPurposes, tags, categories, businesses, phonePrefixes] =
+        await Promise.allSettled([
+          fetchScripts(), fetchSipNumbers(), fetchVoices(), fetchCallPurposes(),
+          fetchClassify('tag'), fetchClassify('category'), fetchClassify('business'),
+          fetchPhonePrefixes(),
+        ]);
       if (!alive) return;
+
       const nextErrors: CatalogState['errors'] = {};
-      const unparsedNote = (name: string, raw?: string) =>
-        raw ? `${name}: gọi được API nhưng không đọc được field. Mẫu response: ${raw}` : undefined;
 
-      setApi({
-        scripts: scripts.status === 'fulfilled' ? scripts.value.items : [],
-        sipNumbers: sipNumbers.status === 'fulfilled' ? sipNumbers.value.items : [],
-        voices: voices.status === 'fulfilled' ? voices.value.items : [],
+      /** Lấy items nếu thành công; ghi lỗi (hoặc cảnh báo không bóc được field) vào nextErrors. */
+      const take = <T>(key: CatalogKey, result: PromiseSettledResult<{ items: T[]; unparsed?: string }>): T[] => {
+        if (result.status === 'rejected') {
+          nextErrors[key] = messageOf(result.reason);
+          return [];
+        }
+        if (result.value.unparsed) {
+          nextErrors[key] = `${CATALOG_LABELS[key]}: gọi được API nhưng không đọc được field. `
+            + `Mẫu response: ${result.value.unparsed}`;
+        }
+        return result.value.items;
+      };
+
+      setData({
+        scripts: take('scripts', scripts),
+        sipNumbers: take('sipNumbers', sipNumbers),
+        voices: take('voices', voices),
+        callPurposes: take('callPurposes', callPurposes),
+        tags: take('tags', tags),
+        categories: take('categories', categories),
+        businesses: take('businesses', businesses),
+        phonePrefixes: take('phonePrefixes', phonePrefixes),
       });
-      if (scripts.status === 'rejected') nextErrors.scripts = messageOf(scripts.reason);
-      else nextErrors.scripts = unparsedNote('Kịch bản', scripts.value.unparsed);
-      if (sipNumbers.status === 'rejected') nextErrors.sipNumbers = messageOf(sipNumbers.reason);
-      else nextErrors.sipNumbers = unparsedNote('Đầu số', sipNumbers.value.unparsed);
-      if (voices.status === 'rejected') nextErrors.voices = messageOf(voices.reason);
-      else nextErrors.voices = unparsedNote('Giọng đọc', voices.value.unparsed);
-
       setErrors(nextErrors);
       setLoading(false);
     })();
+
     return () => { alive = false; };
   }, [tick]);
 
@@ -80,5 +131,5 @@ export function useCatalogs(): CatalogState {
     return () => window.removeEventListener(TOKEN_CHANGED_EVENT, onToken);
   }, [reload]);
 
-  return { ...api, loading, errors, reload };
+  return { ...data, loading, errors, reload };
 }

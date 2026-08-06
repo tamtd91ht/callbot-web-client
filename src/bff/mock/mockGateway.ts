@@ -4,9 +4,10 @@
  * để khi flip sang real mode, FE không gặp bất ngờ về lỗi nghiệp vụ.
  */
 import type {
-  AppendMode, ClientDataSource, ClientSession, ContactSuggestion, CreateSessionRequest,
-  CrmContactFilter, DataRow, ImportBatch, ImportExcelResult, ManualRowsRequest, SessionReport,
-  UpdateSessionRequest,
+  AppendMode, CallbotScript, CallRecord, CallRecordFilter, ClientDataSource, ClientSession,
+  CloneSessionRequest, CloneSessionResult, ContactSuggestion, CreateSessionRequest,
+  CrmContactFilter, DataRow, ImportBatch, ImportExcelResult, ManualRowsRequest, Paginated,
+  SessionReport, UpdateSessionRequest,
 } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
 import { GatewayError, type CallbotGateway, type SessionAction } from '../gateway';
@@ -25,6 +26,26 @@ const MOCK_CONTACTS: ContactSuggestion[] = [
   { id: 'cnt_6', name: 'Hoang Van E', phones: ['0966555444'] },
   { id: 'cnt_7', name: 'Vu Thi F', phones: ['0933222111'] },
   { id: 'cnt_8', name: 'Dang Van G', phones: ['0922333444', '0899000111'] },
+];
+
+/**
+ * Kịch bản mock — trùng danh mục ở components/session/catalogs.ts để mock mode nhất quán
+ * dù UI lấy qua API hay qua hằng số.
+ */
+const MOCK_SCRIPTS: CallbotScript[] = [
+  {
+    id: 'script_1', uuid: 'uuid-demo-script', name: 'CallBot - Phân loại', version: 3, isNewestVersion: true,
+    variables: [{ fieldCode: 'full_name', fieldName: 'Họ tên', type: 'text' }],
+  },
+  {
+    id: 'script_2', uuid: 'uuid-demo-nhacphi', name: 'CallBot - Nhắc phí', version: 7, isNewestVersion: true,
+    variables: [
+      { fieldCode: 'full_name', fieldName: 'Họ tên', type: 'text' },
+      { fieldCode: 'so_tien', fieldName: 'Số tiền cần thu', type: 'number' },
+      { fieldCode: 'han_thanh_toan', fieldName: 'Hạn thanh toán', type: 'date' },
+    ],
+  },
+  { id: 'script_3', uuid: 'uuid-demo-khaosat', name: 'CallBot - Khảo sát CSAT', version: 1, isNewestVersion: true },
 ];
 
 /** Nhóm config core chỉ sửa được ở DRAFT (docs 01 §5); nhóm tunable sửa được khi chưa terminal. */
@@ -133,7 +154,7 @@ export const mockGateway: CallbotGateway = {
     return { ...s, counters: computeCounters(state) };
   },
 
-  async doAction(id: string, action: SessionAction): Promise<ClientSession> {
+  async doAction(id: string, action: SessionAction, cause?: string): Promise<ClientSession> {
     const state = must(id);
     const s = state.session;
     switch (action) {
@@ -151,7 +172,7 @@ export const mockGateway: CallbotGateway = {
       case 'pause': {
         if (s.status !== 'RUNNING') throw new GatewayError('CS_INVALID_STATE', `Only RUNNING can be paused, current: ${s.status}`);
         s.status = 'PAUSED';
-        s.pausedCause = 'User pause';
+        s.pausedCause = cause?.trim() || 'User pause';
         stopTicking(state);
         emitLifecycle(state, s.pausedCause);
         break;
@@ -169,7 +190,7 @@ export const mockGateway: CallbotGateway = {
           throw new GatewayError('CS_INVALID_STATE', `Cannot cancel from ${s.status}`);
         }
         s.status = 'CANCELED';
-        s.cancelCause = 'Client cancel';
+        s.cancelCause = cause?.trim() || 'Client cancel';
         stopTicking(state);
         for (const row of state.rows) {
           if (row.rowStatus === 'STAGED' || row.rowStatus === 'QUEUED' || row.rowStatus === 'DUPLICATE' || row.rowStatus === 'INVALID') {
@@ -396,6 +417,124 @@ export const mockGateway: CallbotGateway = {
     batch.fileName = `${state.session.name}.xlsx`;
     batch.fileKey = `mock/export/${id}.xlsx`;
     return batch;
+  },
+
+  /**
+   * Lịch sử cuộc gọi — dựng TỪ state simulator chứ không sinh dữ liệu bừa: mỗi dòng đã
+   * DISPATCHED/DONE là 1 record, dòng bị retry thì sinh thêm record cho mỗi lần gọi trước.
+   * Nhờ vậy số record luôn khớp counters mà màn realtime đang hiện.
+   */
+  async searchRecords(id: string, filter: CallRecordFilter): Promise<Paginated<CallRecord>> {
+    const state = must(id);
+    const sipNumbers = state.session.sipNumbers ?? [];
+    const all: CallRecord[] = [];
+
+    state.rows.forEach((row, rowIndex) => {
+      if (row.rowStatus !== 'DISPATCHED' && row.rowStatus !== 'DONE') return;
+      const retried = Number(row.variables?.__retryCount || 0);
+      const sip = sipNumbers[rowIndex % Math.max(1, sipNumbers.length)]?.number ?? null;
+
+      // các lần gọi trước (đều là NO_ANSWER vì chỉ NO_ANSWER mới sinh retry)
+      for (let attempt = 0; attempt < retried; attempt += 1) {
+        all.push({
+          recordId: `${row.recordId ?? row.rowId}_r${attempt + 1}`,
+          sessionId: state.session.runtimeSessionId ?? id,
+          phoneNumber: row.phoneNumber,
+          sipNumber: sip,
+          status: 'NO_ANSWER',
+          duration: 0,
+          callIndex: attempt + 1,
+          callIndexTimeMs: row.createdTimeMs + attempt * 60_000,
+          variables: row.variables,
+          startTimeMs: row.createdTimeMs + attempt * 60_000,
+        });
+      }
+
+      // lần gọi hiện tại
+      all.push({
+        recordId: row.recordId ?? row.rowId,
+        sessionId: state.session.runtimeSessionId ?? id,
+        phoneNumber: row.phoneNumber,
+        sipNumber: sip,
+        status: row.callResult ?? 'PROCESSING',
+        duration: row.callResult === 'ANSWERED' ? 25 + (rowIndex % 40) : 0,
+        callIndex: retried + 1,
+        callIndexTimeMs: row.createdTimeMs + retried * 60_000,
+        errorMessage: row.callResult === 'FAILED' ? 'Thuê bao không liên lạc được' : null,
+        variables: row.variables,
+        startTimeMs: row.createdTimeMs + retried * 60_000,
+      });
+    });
+
+    let items = all;
+    if (filter.statuses?.length) items = items.filter((r) => filter.statuses!.includes(r.status));
+    if (filter.keyword?.trim()) {
+      const keyword = filter.keyword.trim().toLowerCase();
+      items = items.filter((r) => r.phoneNumber.includes(keyword)
+        || (r.variables?.full_name ?? '').toLowerCase().includes(keyword));
+    }
+    items.sort((a, b) => (b.startTimeMs ?? 0) - (a.startTimeMs ?? 0));
+
+    const page = filter.page ?? 1;
+    const size = filter.size ?? 20;
+    return { items: items.slice((page - 1) * size, page * size), total: items.length };
+  },
+
+  async cloneSession(req: CloneSessionRequest): Promise<CloneSessionResult> {
+    const source = must(req.sourceSessionId);
+    const src = source.session;
+    const session: ClientSession = {
+      ...src,
+      id: nextId('cs'),
+      name: req.name?.trim() || `${src.name} (bản sao)`,
+      status: 'DRAFT',
+      runtimeSessionId: null,
+      submittedTimeMs: null,
+      completedTimeMs: null,
+      pausedCause: null,
+      cancelCause: null,
+      counters: undefined,
+      createdTimeMs: Date.now(),
+      // copyConfig=false → về mặc định, chỉ giữ tên + đầu số (không có đầu số thì không submit được)
+      ...(req.copyConfig ? {} : {
+        purpose: undefined, startTimeMs: null, timeSlots: [], retryConfig: null,
+        batchSize: 50, batchIntervalSeconds: 30,
+      }),
+      ...(req.overrides ?? {}),
+    };
+
+    const state: MockSessionState = { session, rows: [], timer: null, listeners: new Set(), seq: 0 };
+
+    // Mang data sang theo filter kết quả gọi (giống cloneTypes của AutoCall)
+    const wanted = req.dataFilter?.callStatuses;
+    if (wanted && wanted.length > 0) {
+      state.rows = source.rows
+        .filter((row) => wanted.includes(row.callResult ?? 'PROCESSING'))
+        .map((row) => ({
+          ...row,
+          rowId: nextId('row'),
+          clientSessionId: session.id,
+          rowStatus: 'STAGED' as const,
+          callResult: null,
+          recordId: null,
+          source: 'CLONE' as const,
+          // bỏ cờ retry nội bộ để phiên mới đếm lại từ đầu
+          variables: row.variables
+            ? Object.fromEntries(Object.entries(row.variables).filter(([k]) => k !== '__retryCount'))
+            : undefined,
+          createdTimeMs: Date.now(),
+        }));
+    }
+
+    db().sessions.set(session.id, state);
+    return {
+      session: { ...session, counters: computeCounters(state) },
+      importBatchId: state.rows.length > 0 ? nextId('batch') : null,
+    };
+  },
+
+  async listScripts(): Promise<CallbotScript[]> {
+    return MOCK_SCRIPTS;
   },
 
   subscribe(id: string, listener: (e: SessionEvent) => void): () => void {

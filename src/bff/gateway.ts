@@ -6,8 +6,9 @@
  * FE/route handlers KHÔNG được import mock/real trực tiếp — chỉ qua getGateway().
  */
 import type {
-  AppendMode, ClientSession, ContactSuggestion, CreateSessionRequest, CrmContactFilter, DataRow,
-  ImportBatch, ImportExcelResult, ManualRowsRequest, SessionReport, UpdateSessionRequest,
+  AppendMode, CallbotScript, CallRecord, CallRecordFilter, ClientSession, CloneSessionRequest,
+  CloneSessionResult, ContactSuggestion, CreateSessionRequest, CrmContactFilter, DataRow,
+  ImportBatch, ImportExcelResult, ManualRowsRequest, Paginated, SessionReport, UpdateSessionRequest,
 } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
 
@@ -25,7 +26,8 @@ export interface CallbotGateway {
   getSession(id: string): Promise<ClientSession>;
   /** PATCH config — nhóm core chỉ khi DRAFT (docs 01 §5). */
   updateSession(id: string, patch: UpdateSessionRequest): Promise<ClientSession>;
-  doAction(id: string, action: SessionAction): Promise<ClientSession>;
+  /** `cause` chỉ dùng cho pause/cancel — BE lưu vào pausedCause/cancelCause. */
+  doAction(id: string, action: SessionAction, cause?: string): Promise<ClientSession>;
   addManualRows(id: string, req: ManualRowsRequest): Promise<{ inserted: number; duplicated: number; invalid: number; rows: DataRow[] }>;
   searchRows(id: string, statuses?: string[]): Promise<DataRow[]>;
   /** Xoá rows (chỉ STAGED/DUPLICATE/INVALID → REMOVED). */
@@ -52,6 +54,17 @@ export interface CallbotGateway {
   restoreDuplicate(id: string, rowId: string): Promise<DataRow>;
   report(id: string): Promise<SessionReport>;
   exportData(id: string, rowStatuses?: string[]): Promise<ImportBatch>;
+
+  // ===== Parity AutoCall: lịch sử cuộc gọi, nhân bản phiên, danh mục kịch bản =====
+  /**
+   * Lịch sử cuộc gọi THỰC TẾ (1 dòng data retry 3 lần → 3 record) — khác searchRows là
+   * data staging. Tương đương bảng lịch sử gọi ở màn chi tiết phiên AutoCall.
+   */
+  searchRecords(id: string, filter: CallRecordFilter): Promise<Paginated<CallRecord>>;
+  /** Nhân bản phiên — tương đương "Gọi lại phiên" của AutoCall. */
+  cloneSession(req: CloneSessionRequest): Promise<CloneSessionResult>;
+  /** Danh mục kịch bản (mock mode; real mode FE gọi thẳng gateway chatbot). */
+  listScripts(): Promise<CallbotScript[]>;
   /** Đăng ký nhận realtime events của 1 phiên (mock: từ simulator; real: C-03 sẽ chuyển FE nối socket trực tiếp). */
   subscribe(id: string, listener: (e: SessionEvent) => void): () => void;
 }

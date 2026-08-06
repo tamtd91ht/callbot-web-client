@@ -9,6 +9,7 @@
  * TOÀN BỘ config phức (mất luôn sipNumbers) — nên đừng tự sửa tay các value dưới đây.
  */
 import type { SipNumber } from '@/contracts/types';
+import type { ScriptOption } from '@/lib/catalogApi';
 
 export const PURPOSES = ['Auto Call', 'Nhắc phí', 'CSKH', 'Khảo sát', 'Telesale'];
 
@@ -18,9 +19,22 @@ export const SIP_NUMBERS: SipNumber[] = [
   { number: '842873002222', network: 'mobifone', gateway: 'gw2' },
 ];
 
-export const SCRIPTS = [
-  { uuid: 'uuid-demo-script', name: 'CallBot - Phân loại' },
-  { uuid: 'uuid-demo-nhacphi', name: 'CallBot - Nhắc phí' },
+/** Kèm `variables` để mock mode cũng chạy được khối "Biến cần nạp" ở ScriptField. */
+export const SCRIPTS: ScriptOption[] = [
+  {
+    uuid: 'uuid-demo-script',
+    name: 'CallBot - Phân loại',
+    variables: [{ fieldCode: 'full_name', fieldName: 'Họ tên' }],
+  },
+  {
+    uuid: 'uuid-demo-nhacphi',
+    name: 'CallBot - Nhắc phí',
+    variables: [
+      { fieldCode: 'full_name', fieldName: 'Họ tên' },
+      { fieldCode: 'so_tien', fieldName: 'Số tiền cần thu' },
+      { fieldCode: 'han_thanh_toan', fieldName: 'Hạn thanh toán' },
+    ],
+  },
   { uuid: 'uuid-demo-khaosat', name: 'CallBot - Khảo sát CSAT' },
 ];
 

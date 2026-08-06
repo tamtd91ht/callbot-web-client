@@ -5,6 +5,7 @@
  */
 import { useState } from 'react';
 import type { RetryConfig, TimeSlot } from '@/contracts/types';
+import { LIMITS, validateDistribution } from '@/lib/validation';
 import { Button, Field, Modal, inputClass } from '../ui';
 
 export interface DistributionValue {
@@ -52,18 +53,10 @@ export function DistributionModal({
   if (!open && wasOpen) setWasOpen(false);
 
   function save() {
-    if (draft.batchSize < 1 || draft.batchSize > 500) return setError('Số cuộc mỗi lần phân bổ phải trong [1, 500]');
-    if (draft.batchIntervalSeconds < 10 || draft.batchIntervalSeconds > 3600) return setError('Chu kỳ phân bổ phải trong [10, 3600] giây');
-    for (const slot of draft.timeSlots) {
-      if (!/^\d{2}:\d{2}$/.test(slot.from) || !/^\d{2}:\d{2}$/.test(slot.to)) return setError('Khung giờ phải dạng HH:mm');
-      if (slot.from >= slot.to) return setError(`Khung giờ ${slot.from} - ${slot.to}: giờ bắt đầu phải trước giờ kết thúc`);
-      // [FR-004] [] nghĩa là "không ngày nào" — BE coi rỗng = mọi ngày nên phải chặn từ UI
-      if (slot.daysOfWeek && slot.daysOfWeek.length === 0) {
-        return setError(`Khung giờ ${slot.from} - ${slot.to}: chọn ít nhất 1 ngày trong tuần`);
-      }
-    }
-    if (draft.retryConfig && (draft.retryConfig.maxRetry < 1 || draft.retryConfig.maxRetry > 10)) return setError('Số lần gọi lại tối đa trong [1, 10]');
-    if (draft.retryConfig && draft.retryConfig.delaySeconds < 30) return setError('Thời gian chờ gọi lại tối thiểu 30 giây');
+    // validate dùng chung với màn Tạo phiên (lib/validation) — một nguồn ràng buộc duy nhất,
+    // khỏi lệch bound giữa modal và lúc submit
+    const message = validateDistribution(draft);
+    if (message) return setError(message);
     onSave(draft);
     onClose();
   }
@@ -79,12 +72,14 @@ export function DistributionModal({
         <div>
           <h4 className="mb-2 text-sm font-bold">Phân bổ</h4>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Số cuộc gọi mỗi lần (batch)">
-              <input type="number" className={inputClass} value={draft.batchSize}
+            <Field label={`Số cuộc gọi mỗi lần (${LIMITS.batchSize.min}–${LIMITS.batchSize.max})`}>
+              <input type="number" min={LIMITS.batchSize.min} max={LIMITS.batchSize.max}
+                className={inputClass} value={draft.batchSize}
                 onChange={(e) => setDraft({ ...draft, batchSize: Number(e.target.value) })} />
             </Field>
-            <Field label="Chu kỳ phân bổ (giây)">
-              <input type="number" className={inputClass} value={draft.batchIntervalSeconds}
+            <Field label={`Chu kỳ phân bổ (${LIMITS.batchIntervalSeconds.min}–${LIMITS.batchIntervalSeconds.max} giây)`}>
+              <input type="number" min={LIMITS.batchIntervalSeconds.min} max={LIMITS.batchIntervalSeconds.max}
+                className={inputClass} value={draft.batchIntervalSeconds}
                 onChange={(e) => setDraft({ ...draft, batchIntervalSeconds: Number(e.target.value) })} />
             </Field>
           </div>
@@ -147,12 +142,14 @@ export function DistributionModal({
           </label>
           {draft.retryConfig && (
             <div className="mt-3 grid grid-cols-2 gap-3">
-              <Field label="Số lần gọi lại tối đa">
-                <input type="number" className={inputClass} value={draft.retryConfig.maxRetry}
+              <Field label={`Số lần gọi lại tối đa (${LIMITS.maxRetry.min}–${LIMITS.maxRetry.max})`}>
+                <input type="number" min={LIMITS.maxRetry.min} max={LIMITS.maxRetry.max}
+                  className={inputClass} value={draft.retryConfig.maxRetry}
                   onChange={(e) => setDraft({ ...draft, retryConfig: { ...draft.retryConfig!, maxRetry: Number(e.target.value) } })} />
               </Field>
-              <Field label="Gọi lại sau (giây, từ lúc cuộc kết thúc)">
-                <input type="number" className={inputClass} value={draft.retryConfig.delaySeconds}
+              <Field label={`Gọi lại sau (≥ ${LIMITS.delaySeconds.min} giây, từ lúc cuộc kết thúc)`}>
+                <input type="number" min={LIMITS.delaySeconds.min}
+                  className={inputClass} value={draft.retryConfig.delaySeconds}
                   onChange={(e) => setDraft({ ...draft, retryConfig: { ...draft.retryConfig!, delaySeconds: Number(e.target.value) } })} />
               </Field>
             </div>

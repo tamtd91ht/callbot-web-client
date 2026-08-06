@@ -13,8 +13,10 @@ import type {
 } from '@/contracts/types';
 import { ApiError, api, get, post } from '@/lib/apiClient';
 import { sessionApi } from '@/lib/sessionApi';
+import { useCatalogs } from '@/lib/useCatalogs';
 import { Button, Drawer, Tabs, inputClass } from '../ui';
 import { COUNTRY_CODE_OPTIONS, type CountryCodeOption, applyCountryCode } from './catalogs';
+import { ClassifyPicker } from './ClassifyPicker';
 
 interface StagedCustomer { name: string; phone: string; variables?: Record<string, string> }
 
@@ -80,6 +82,7 @@ function AppendModePicker({ running, appendMode, setAppendMode }: Pick<TabProps,
 /* ============================== TAB THỦ CÔNG ============================== */
 
 function ManualTab({ ensureSessionId, onAdded, onClose, running, appendMode, setAppendMode }: TabProps) {
+  const catalogs = useCatalogs();
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<ContactSuggestion[]>([]);
   const [staged, setStaged] = useState<StagedCustomer[]>([]);
@@ -89,6 +92,9 @@ function ManualTab({ ensureSessionId, onAdded, onClose, running, appendMode, set
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Prefix doanh nghiệp cấu hình, trừ những mã đã có sẵn thành chip cố định. */
+  const extraPrefixes = catalogs.phonePrefixes.filter((p) => !['0', '84', '0084'].includes(p));
 
   useEffect(() => {
     if (debounce.current) clearTimeout(debounce.current);
@@ -209,8 +215,24 @@ function ManualTab({ ensureSessionId, onAdded, onClose, running, appendMode, set
             </button>
           ))}
           {countryCode === 'Tùy chỉnh' && (
-            <input className="w-24 rounded-lg border border-(--color-line) px-2 py-1 text-sm" placeholder="+81"
-              value={customCode} onChange={(e) => setCustomCode(e.target.value)} />
+            <>
+              <input className="w-24 rounded-lg border border-(--color-line) px-2 py-1 text-sm" placeholder="+81"
+                value={customCode} onChange={(e) => setCustomCode(e.target.value)} />
+              {/* Prefix doanh nghiệp đã cấu hình (API phone_prefix) — bấm để điền nhanh,
+                  đỡ phải nhớ mã. Chỉ hiện những mã chưa có sẵn trong 3 chip cố định. */}
+              {extraPrefixes.length > 0 && (
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-(--color-muted)">gợi ý:</span>
+                  {extraPrefixes.map((prefix) => (
+                    <button key={prefix} onClick={() => setCustomCode(prefix)}
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-(--color-line) ${
+                        customCode === prefix ? 'bg-(--color-primary-soft) text-(--color-primary-dark)' : 'bg-white hover:bg-(--color-field)'}`}>
+                      {prefix}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </>
           )}
           <span className="ml-auto"><AppendModePicker running={running} appendMode={appendMode} setAppendMode={setAppendMode} /></span>
         </div>
@@ -352,16 +374,13 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
 
 /* ====================== TAB THUỘC TÍNH KHÁCH HÀNG (CRM) ====================== */
 
-/** Bộ lọc BE hỗ trợ (B6). Chưa có API danh mục tag/nhóm nên nhập ID, phân cách bằng dấu phẩy. */
-const CRM_FILTER_FIELDS = [
-  { key: 'tagIds' as const, label: 'Tag', placeholder: 'tag_vip, tag_moi' },
-  { key: 'categoryIds' as const, label: 'Nhóm khách hàng', placeholder: 'cat_1, cat_2' },
-  { key: 'businessIds' as const, label: 'Loại hình', placeholder: 'biz_1' },
-  { key: 'userOwnerIds' as const, label: 'Người phụ trách', placeholder: 'user_1' },
-];
-
 function CrmTab({ ensureSessionId, onAdded, onClose, running, appendMode, setAppendMode }: TabProps) {
-  const [raw, setRaw] = useState<Record<string, string>>({});
+  const catalogs = useCatalogs();
+  const [tagIds, setTagIds] = useState<string[]>([]);
+  const [categoryIds, setCategoryIds] = useState<string[]>([]);
+  const [businessIds, setBusinessIds] = useState<string[]>([]);
+  /** Người phụ trách: chưa có API danh mục nhân viên nên vẫn nhập id (xem docs/backend-gaps.md). */
+  const [ownerRaw, setOwnerRaw] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [count, setCount] = useState<number | null>(null);
@@ -369,17 +388,24 @@ function CrmTab({ ensureSessionId, onAdded, onClose, running, appendMode, setApp
   const [error, setError] = useState<string | null>(null);
   const [enqueued, setEnqueued] = useState(false);
 
+  /** Bất kỳ thay đổi bộ lọc nào cũng làm số đếm cũ vô nghĩa. */
+  const resetCount = () => setCount(null);
+
   function buildFilter(): CrmContactFilter {
     const filter: CrmContactFilter = {};
-    for (const field of CRM_FILTER_FIELDS) {
-      const ids = (raw[field.key] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-      if (ids.length) filter[field.key] = ids;
-    }
+    if (tagIds.length) filter.tagIds = tagIds;
+    if (categoryIds.length) filter.categoryIds = categoryIds;
+    if (businessIds.length) filter.businessIds = businessIds;
+    const owners = ownerRaw.split(',').map((s) => s.trim()).filter(Boolean);
+    if (owners.length) filter.userOwnerIds = owners;
     if (dateFrom) filter.createdFromMs = new Date(dateFrom).getTime();
     // đến hết ngày đã chọn, không phải 00:00 của ngày đó
     if (dateTo) filter.createdToMs = new Date(dateTo).getTime() + 86_399_999;
     return filter;
   }
+
+  /** Không đặt bộ lọc nào = lấy TOÀN BỘ danh bạ — phải cảnh báo trước khi nạp. */
+  const noFilter = Object.keys(buildFilter()).length === 0;
 
   async function preview() {
     setBusy(true); setError(null); setEnqueued(false);
@@ -410,26 +436,45 @@ function CrmTab({ ensureSessionId, onAdded, onClose, running, appendMode, setApp
       </p>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {CRM_FILTER_FIELDS.map((field) => (
-          <label key={field.key} className="text-sm">
-            <span className="mb-1 block text-xs text-(--color-muted)">{field.label}</span>
-            <input className="w-full rounded-lg border border-(--color-line) bg-(--color-field) px-3 py-2 outline-none"
-              placeholder={field.placeholder}
-              value={raw[field.key] ?? ''}
-              onChange={(e) => { setRaw({ ...raw, [field.key]: e.target.value }); setCount(null); }} />
-          </label>
-        ))}
+        <ClassifyPicker label="Thẻ" options={catalogs.tags} selected={tagIds}
+          onChange={(ids) => { setTagIds(ids); resetCount(); }}
+          loading={catalogs.loading} error={catalogs.errors.tags} onRetry={catalogs.reload}
+          emptyHint="Doanh nghiệp chưa có thẻ nào" />
+        <ClassifyPicker label="Nhóm khách hàng" options={catalogs.categories} selected={categoryIds}
+          onChange={(ids) => { setCategoryIds(ids); resetCount(); }}
+          loading={catalogs.loading} error={catalogs.errors.categories} onRetry={catalogs.reload}
+          emptyHint="Doanh nghiệp chưa có nhóm khách hàng nào" />
+        <ClassifyPicker label="Loại hình" options={catalogs.businesses} selected={businessIds}
+          onChange={(ids) => { setBusinessIds(ids); resetCount(); }}
+          loading={catalogs.loading} error={catalogs.errors.businesses} onRetry={catalogs.reload}
+          emptyHint="Doanh nghiệp chưa có loại hình nào" />
+        <label className="text-sm">
+          <span className="mb-1 block text-xs text-(--color-muted)">
+            Người phụ trách <span className="text-(--color-muted)">(nhập id, cách nhau bằng dấu phẩy)</span>
+          </span>
+          <input className="w-full rounded-lg border border-(--color-line) bg-(--color-field) px-3 py-2 outline-none"
+            placeholder="user_1, user_2"
+            value={ownerRaw}
+            onChange={(e) => { setOwnerRaw(e.target.value); resetCount(); }} />
+        </label>
         <label className="text-sm">
           <span className="mb-1 block text-xs text-(--color-muted)">Ngày tạo từ</span>
           <input type="date" className="w-full rounded-lg border border-(--color-line) bg-(--color-field) px-3 py-2 outline-none"
-            value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setCount(null); }} />
+            value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); resetCount(); }} />
         </label>
         <label className="text-sm">
           <span className="mb-1 block text-xs text-(--color-muted)">đến</span>
           <input type="date" className="w-full rounded-lg border border-(--color-line) bg-(--color-field) px-3 py-2 outline-none"
-            value={dateTo} onChange={(e) => { setDateTo(e.target.value); setCount(null); }} />
+            value={dateTo} onChange={(e) => { setDateTo(e.target.value); resetCount(); }} />
         </label>
       </div>
+
+      {noFilter && (
+        <div className="mt-3 rounded-lg bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+          Chưa đặt bộ lọc nào — sẽ lấy <b>toàn bộ danh bạ</b> của doanh nghiệp. Bấm “Xem trước số lượng”
+          để biết chính xác bao nhiêu khách hàng trước khi nạp.
+        </div>
+      )}
 
       <p className="mt-3 text-xs text-(--color-muted)">
         Để trống tất cả = lấy toàn bộ danh bạ. Chưa có API danh mục tag/nhóm nên tạm nhập ID

@@ -32,14 +32,25 @@ export function Button({
   );
 }
 
-/** Input filled với label nhỏ BÊN TRONG field — đúng kiểu template. */
+/**
+ * Input filled với label nhỏ BÊN TRONG field — đúng kiểu template.
+ * `invalid`: viền + nhãn đỏ. Bám cách AutoCall báo lỗi (đổi label thành message lỗi rồi
+ * bật isError) — lỗi nằm ngay cạnh field, không phải đọc toast ở góc màn hình.
+ */
 export function Field({
-  label, required, children, highlight = false, className = '',
-}: { label: string; required?: boolean; children: ReactNode; highlight?: boolean; className?: string }) {
+  label, required, children, highlight = false, invalid = false, className = '',
+}: {
+  label: string; required?: boolean; children: ReactNode;
+  highlight?: boolean; invalid?: boolean; className?: string;
+}) {
+  const tone = invalid
+    ? 'border-(--color-danger) bg-red-50'
+    : highlight
+      ? 'border-sky-200 bg-sky-50'
+      : 'border-transparent bg-(--color-field)';
   return (
-    <label className={`block rounded-(--radius-field) border px-4 py-2 ${
-      highlight ? 'border-sky-200 bg-sky-50' : 'border-transparent bg-(--color-field)'} ${className}`}>
-      <span className="block text-xs text-(--color-muted)">
+    <label className={`block rounded-(--radius-field) border px-4 py-2 ${tone} ${className}`}>
+      <span className={`block text-xs ${invalid ? 'font-semibold text-(--color-danger)' : 'text-(--color-muted)'}`}>
         {label} {required && <span className="text-(--color-danger)">*</span>}
       </span>
       {children}

@@ -6,9 +6,10 @@
  * "CS_XXX: ..." trong message (BE không có field errorCode riêng — convention B8).
  */
 import type {
-  ClientDataSource, ClientRowStatus, ClientSession, ClientSessionStatus, ContactSuggestion,
-  CreateSessionRequest, DataRow, DedupeConfig, ImportBatch, RetryConfig, SessionCounters,
-  SipNumber, TimeSlot, UpdateSessionRequest, VariablePriority,
+  CallbotScript, CallRecord, ClientDataSource, ClientRowStatus, ClientSession, ClientSessionStatus,
+  ContactSuggestion, CreateSessionRequest, DataRow, DedupeConfig, ImportBatch, RecordStatus,
+  RetryConfig, ScriptVariable, SessionCounters, SipNumber, TimeSlot, UpdateSessionRequest,
+  VariablePriority,
 } from './types';
 
 export const SUCCESS_CODE = 9999;
@@ -128,6 +129,44 @@ export interface OldRecordDTO {
   refId?: string;
   createdTimeMs?: number;
   cause?: string;
+}
+
+/* ===================== Shapes BE — kịch bản & lịch sử cuộc gọi ===================== */
+
+/** CallBotScriptForFilterDTO — /filter/script/newest-version/list và /list-by-uuids. */
+export interface BeScriptDTO {
+  id?: string;
+  uuid?: string;
+  name?: string;
+  version?: number;
+  isNewestVersion?: boolean;
+  /** Một số bản BE trả kèm biến kịch bản; tên field chưa chốt nên nhận cả 2 dạng. */
+  variables?: Array<{ fieldCode?: string; fieldName?: string; type?: string }>;
+  scriptVariables?: Array<{ fieldCode?: string; fieldName?: string; type?: string }>;
+}
+
+/** CallBotRecordDTO — /record/search. BE chưa chốt hết tên field nên map phòng thủ. */
+export interface BeRecordDTO {
+  recordId?: string;
+  id?: string;
+  sessionId?: string;
+  phoneNumber?: string;
+  sipNumber?: string | null;
+  status?: RecordStatus;
+  duration?: number | null;
+  billSec?: number | null;
+  callIndex?: number | null;
+  callIndexTimeMs?: number | null;
+  errorCode?: string | null;
+  cause?: string | null;
+  errorMessage?: string | null;
+  recordingUrl?: string | null;
+  recordFile?: string | null;
+  variables?: Record<string, string>;
+  startTimeMs?: number | null;
+  timeStartToAnswer?: number | null;
+  endTimeMs?: number | null;
+  createdTimeMs?: number | null;
 }
 
 /* ===================== Composite id (API cũ cần sessionTimeMs) ===================== */
@@ -293,6 +332,46 @@ export function mapOldRecord(dto: OldRecordDTO, clientSessionId: string): DataRo
     recordId: dto.recordId ?? dto.id ?? null,
     callResult: status === 'PROCESSING' ? null : status,
     createdTimeMs: dto.createdTimeMs ?? 0,
+  };
+}
+
+export function mapScript(dto: BeScriptDTO): CallbotScript {
+  const rawVariables = dto.variables ?? dto.scriptVariables ?? [];
+  const variables: ScriptVariable[] = rawVariables
+    .filter((v) => !!v.fieldCode)
+    .map((v) => ({ fieldCode: v.fieldCode!, fieldName: v.fieldName, type: v.type }));
+  return {
+    id: dto.id ?? '',
+    // uuid là thứ gửi lên khi tạo phiên; thiếu uuid thì kịch bản này vô dụng nên fallback về id
+    uuid: dto.uuid ?? dto.id ?? '',
+    name: dto.name ?? dto.uuid ?? 'Kịch bản không tên',
+    version: dto.version,
+    isNewestVersion: dto.isNewestVersion,
+    variables: variables.length > 0 ? variables : undefined,
+  };
+}
+
+export function mapCallRecord(dto: BeRecordDTO): CallRecord {
+  // timeStartToAnswer của BE tính bằng GIÂY (ghi rõ trong callbot-speed-note), không phải millis
+  const startTimeMs = dto.startTimeMs
+    ?? (dto.timeStartToAnswer ? dto.timeStartToAnswer * 1000 : null)
+    ?? dto.createdTimeMs
+    ?? null;
+  return {
+    recordId: dto.recordId ?? dto.id ?? '',
+    sessionId: dto.sessionId,
+    phoneNumber: dto.phoneNumber ?? '',
+    sipNumber: dto.sipNumber ?? null,
+    status: dto.status ?? 'PROCESSING',
+    duration: dto.duration ?? dto.billSec ?? null,
+    callIndex: dto.callIndex ?? null,
+    callIndexTimeMs: dto.callIndexTimeMs ?? null,
+    errorCode: dto.errorCode ?? null,
+    errorMessage: dto.errorMessage ?? dto.cause ?? null,
+    recordingUrl: dto.recordingUrl ?? dto.recordFile ?? null,
+    variables: dto.variables,
+    startTimeMs,
+    endTimeMs: dto.endTimeMs ?? null,
   };
 }
 

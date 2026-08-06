@@ -12,22 +12,53 @@ import type { SipNumber } from '@/contracts/types';
 import type { ScriptOption } from '@/lib/catalogApi';
 import { IS_REAL } from '@/lib/sessionApi';
 import type { CatalogState } from '@/lib/useCatalogs';
-import { SCRIPTS, SIP_NUMBERS, VOICES } from './catalogs';
+import { PURPOSES, SCRIPTS, SIP_NUMBERS, VOICES } from './catalogs';
 import { Field, inputClass } from '../ui';
 
 /* ============================== Kịch bản ============================== */
 
 export function ScriptField({
-  value, onChange, catalogs,
-}: { value: string; onChange: (uuid: string) => void; catalogs: CatalogState }) {
+  value, onChange, catalogs, error, fieldRef, onViewDetail,
+}: {
+  value: string;
+  onChange: (uuid: string) => void;
+  catalogs: CatalogState;
+  /** Lỗi validate — hiện ngay trên nhãn field như AutoCall (errors.script). */
+  error?: string;
+  fieldRef?: React.Ref<HTMLSelectElement>;
+  onViewDetail?: () => void;
+}) {
   const options = IS_REAL ? catalogs.scripts : SCRIPTS;
+  const selected = options.find((s) => s.uuid === value);
 
   return (
-    <Field label="Kịch bản AI Callbot" required>
-      <select className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
-        {!value && <option value="">{catalogs.loading ? 'Đang tải kịch bản…' : '— Chọn kịch bản —'}</option>}
-        {options.map((s) => <option key={s.uuid} value={s.uuid}>{s.name}</option>)}
-      </select>
+    <Field label={error || 'Kịch bản AI Callbot'} required invalid={!!error}>
+      <div className="flex items-center gap-2">
+        <select ref={fieldRef} className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
+          {!value && <option value="">{catalogs.loading ? 'Đang tải kịch bản…' : '— Chọn kịch bản —'}</option>}
+          {options.map((s) => <option key={s.uuid} value={s.uuid}>{s.name}</option>)}
+        </select>
+        {/* AutoCall có link "Xem chi tiết" mở drawer kịch bản — giữ hành vi đó */}
+        <button type="button" disabled={!value}
+          onClick={(e) => { e.preventDefault(); onViewDetail?.(); }}
+          className="shrink-0 text-sm font-semibold text-(--color-link) hover:underline disabled:opacity-40 disabled:hover:no-underline">
+          Xem chi tiết
+        </button>
+      </div>
+
+      {/* Tối ưu so với AutoCall: hiện luôn biến kịch bản cần nạp (CallBot chỉ 1 kịch bản nên có chỗ) */}
+      {selected?.variables && selected.variables.length > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-xs text-(--color-muted)">Biến cần nạp:</span>
+          {selected.variables.map((variable) => (
+            <code key={variable.fieldCode} title={variable.fieldName || variable.fieldCode}
+              className="rounded bg-white px-1.5 py-0.5 text-[11px] font-medium text-(--color-ink) ring-1 ring-(--color-line)">
+              {variable.fieldCode}
+            </code>
+          ))}
+        </div>
+      )}
+
       <CatalogEmpty show={IS_REAL && !catalogs.loading && options.length === 0 && !catalogs.errors.scripts}
         label="kịch bản" hint="Tạo kịch bản ở màn AI Callbot của OmiCRM rồi bấm thử lại." onRetry={catalogs.reload} />
       <CatalogError message={catalogs.errors.scripts} onRetry={catalogs.reload} />
@@ -43,8 +74,14 @@ export function ScriptField({
  * trên chip đã chọn.
  */
 export function SipNumbersField({
-  value, onChange, catalogs,
-}: { value: SipNumber[]; onChange: (next: SipNumber[]) => void; catalogs: CatalogState }) {
+  value, onChange, catalogs, error, anchorRef,
+}: {
+  value: SipNumber[];
+  onChange: (next: SipNumber[]) => void;
+  catalogs: CatalogState;
+  error?: string;
+  anchorRef?: React.Ref<HTMLDivElement>;
+}) {
   const options = IS_REAL ? catalogs.sipNumbers : SIP_NUMBERS;
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -64,9 +101,18 @@ export function SipNumbersField({
     onChange(selected ? value.filter((s) => s.number !== sip.number) : [...value, sip]);
   }
 
+  // anchorRef (do màn ngoài truyền vào để scroll tới khi lỗi) và boxRef (click-outside) cùng trỏ
+  // một node — gộp lại thay vì chọn một trong hai, nếu không thì mất tính năng còn lại.
+  const attachBox = (node: HTMLDivElement | null) => {
+    boxRef.current = node;
+    if (typeof anchorRef === 'function') anchorRef(node);
+    else if (anchorRef) (anchorRef as React.RefObject<HTMLDivElement | null>).current = node;
+  };
+
   return (
-    <Field label="Đầu số (chọn 1 hoặc nhiều — phân bổ theo nhà mạng)" required highlight>
-      <div className="relative" ref={boxRef}>
+    <Field label={error || 'Đầu số (chọn 1 hoặc nhiều — phân bổ theo nhà mạng)'}
+      required highlight invalid={!!error}>
+      <div className="relative" ref={attachBox}>
         {/* preventDefault BẮT BUỘC: Field bọc trong <label> — không chặn thì browser forward click
             tới labelable element đầu tiên bên trong (nút option/nút × chip) → tự chọn số ngoài ý muốn */}
         <div role="button" tabIndex={0} aria-expanded={open}
@@ -143,6 +189,34 @@ export function VoiceField({
         </select>
       </div>
       <CatalogError message={catalogs.errors.voices} onRetry={catalogs.reload} />
+    </Field>
+  );
+}
+
+/* ============================== Mục đích cuộc gọi ============================== */
+
+/**
+ * Mục đích cuộc gọi — danh mục do doanh nghiệp tự định nghĩa (service CDR), KHÔNG hardcode.
+ * BE callbot lưu `purpose` là chuỗi tự do nên ta gửi TÊN mục đích; app OMICRM thật gửi cả
+ * id + name, nhưng client-session không có field id nên tên là đủ và đọc được ở báo cáo.
+ * Không bắt buộc — app thật cũng cho để trống ("Không áp dụng").
+ */
+export function PurposeField({
+  value, onChange, catalogs,
+}: { value: string; onChange: (purpose: string) => void; catalogs: CatalogState }) {
+  const options = IS_REAL ? catalogs.callPurposes.map((p) => p.name) : PURPOSES;
+
+  return (
+    <Field label="Mục đích cuộc gọi">
+      <select className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">
+          {IS_REAL && catalogs.loading && options.length === 0 ? 'Đang tải…' : 'Không áp dụng'}
+        </option>
+        {options.map((name) => <option key={name} value={name}>{name}</option>)}
+        {/* giữ giá trị cũ của phiên nháp dù danh mục đã đổi/xoá — không âm thầm mất dữ liệu */}
+        {value && !options.includes(value) && <option value={value}>{value} (không còn trong danh mục)</option>}
+      </select>
+      <CatalogError message={catalogs.errors.callPurposes} onRetry={catalogs.reload} />
     </Field>
   );
 }
