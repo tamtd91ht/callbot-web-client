@@ -46,6 +46,8 @@ interface FormState {
   voiceOverride: string;
   /** [FR-008] '' = theo mặc định tổng đài (60s). */
   ringTimeoutSeconds: string;
+  /** [XFuture] '' = không giới hạn thời lượng cuộc (mặc định BE). */
+  maxCallTimeSeconds: string;
   distribution: DistributionValue;
   variableOrder: string[];
 }
@@ -65,6 +67,8 @@ function defaultForm(): FormState {
     scriptUuid: IS_REAL ? '' : SCRIPTS[0].uuid,
     voiceOverride: '',
     ringTimeoutSeconds: '30', // mặc định MAFC theo mockup FR-008
+    // Để TRỐNG = không giới hạn, đúng mặc định BE (null). Đặt sẵn một con số là tự ý cắt cuộc.
+    maxCallTimeSeconds: '',
 
     distribution: {
       batchSize: 10, batchIntervalSeconds: 30, timeSlots: [],
@@ -131,6 +135,7 @@ export function CreateSessionScreen() {
     scriptUuid: f.scriptUuid,
     voiceOverride: f.voiceOverride || null,
     ringTimeoutSeconds: f.ringTimeoutSeconds.trim() ? Number(f.ringTimeoutSeconds) : null,
+    maxCallTimeSeconds: f.maxCallTimeSeconds.trim() ? Number(f.maxCallTimeSeconds) : null,
     batchSize: f.distribution.batchSize,
     batchIntervalSeconds: f.distribution.batchIntervalSeconds,
     timeSlots: f.distribution.timeSlots,
@@ -277,6 +282,7 @@ export function CreateSessionScreen() {
     timeSlots: form.distribution.timeSlots,
     retryConfig: form.distribution.retryConfig,
     ringTimeoutSeconds: form.ringTimeoutSeconds.trim() ? Number(form.ringTimeoutSeconds) : null,
+    maxCallTimeSeconds: form.maxCallTimeSeconds.trim() ? Number(form.maxCallTimeSeconds) : null,
     totalRows: activeRows.length,
   };
 
@@ -338,6 +344,22 @@ export function CreateSessionScreen() {
                   onChange={(e) => patch({ ringTimeoutSeconds: e.target.value })} />
                 <span className="text-sm text-(--color-muted)">
                   giây — ngắt cuộc nếu không kết nối được (5–60; bỏ trống = mặc định tổng đài 60s)
+                </span>
+              </div>
+            </Field>
+
+            {/* [XFuture] Cắt cuộc tính TỪ LÚC KẾT NỐI — khác hẳn ring timeout ở trên */}
+            <Field label={errors.maxCallTimeSeconds || 'Thời lượng cuộc tối đa'}
+              invalid={!!errors.maxCallTimeSeconds}>
+              <div className="flex items-center gap-2">
+                <input ref={setFieldRef('maxCallTimeSeconds')} type="number" min={30} max={3600}
+                  className={`${inputClass} max-w-28`}
+                  placeholder="Không giới hạn"
+                  value={form.maxCallTimeSeconds}
+                  onChange={(e) => patch({ maxCallTimeSeconds: e.target.value })} />
+                <span className="text-sm text-(--color-muted)">
+                  giây — cắt cuộc sau khi ĐÃ kết nối (30–3600; bỏ trống = không giới hạn).
+                  Tổng đài chưa áp dụng field này.
                 </span>
               </div>
             </Field>

@@ -43,6 +43,9 @@ function tick(state: MockSessionState): void {
         row.callResult = 'NO_ANSWER';
         const retry = session.retryConfig;
         const retried = Number(row.variables?.__retryCount || 0);
+        // CHỈ NO_ANSWER — đúng hiện trạng BE: BOT_ACTION đã có EngineBotActionRetryService nhưng
+        // ClientRuntimeSessionFactory không set retryConfig lên runtime session nên phiên client
+        // bị bỏ qua, không gọi lại lần nào (backend-gaps §12). Đừng "sửa" mock cho tử tế hơn BE.
         if (retry && retry.trigger === 'NO_ANSWER' && retried < retry.maxRetry) {
           // clone-retry: quay lại hàng đợi, giữ priority (mô phỏng appendRecordsRetryCall)
           row.variables = { ...row.variables, __retryCount: String(retried + 1) };

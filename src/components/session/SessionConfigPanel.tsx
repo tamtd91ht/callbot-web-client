@@ -44,6 +44,8 @@ export function SessionConfigPanel({
               : 'Không'} />
           <Row label="Chờ kết nối"
             value={session.ringTimeoutSeconds ? `${session.ringTimeoutSeconds}s` : 'Mặc định tổng đài'} />
+          <Row label="Thời lượng cuộc tối đa"
+            value={session.maxCallTimeSeconds ? `${session.maxCallTimeSeconds}s` : 'Không giới hạn'} />
         </div>
       </div>
 

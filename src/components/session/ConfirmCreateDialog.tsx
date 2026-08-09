@@ -22,6 +22,7 @@ export interface ConfirmCreateSummary {
   timeSlots: TimeSlot[];
   retryConfig: RetryConfig | null;
   ringTimeoutSeconds: number | null;
+  maxCallTimeSeconds: number | null;
   totalRows: number;
 }
 
@@ -72,6 +73,9 @@ export function ConfirmCreateDialog({
             value={`${summary.batchSize} cuộc mỗi ${summary.batchIntervalSeconds}s`} />
           {summary.ringTimeoutSeconds != null && (
             <Row label="Chờ kết nối" value={`${summary.ringTimeoutSeconds}s`} />
+          )}
+          {summary.maxCallTimeSeconds != null && (
+            <Row label="Thời lượng cuộc tối đa" value={`${summary.maxCallTimeSeconds}s`} />
           )}
           <Row label="Gọi lại khi không nghe máy"
             value={summary.retryConfig

@@ -73,6 +73,12 @@ export interface ClientSession {
   retryConfig?: RetryConfig | null;
   /** [FR-008] Ngắt cuộc nếu không kết nối sau N giây (5–60); null = mặc định tổng đài (60s). */
   ringTimeoutSeconds?: number | null;
+  /**
+   * [XFuture] Cắt cuộc sau N giây tính TỪ LÚC KẾT NỐI (30–3600); null = không giới hạn.
+   * Khác ringTimeoutSeconds vốn chỉ giới hạn thời gian ĐỔ CHUÔNG.
+   * ⚠️ Wrapper CHƯA đọc field này — callbot-service đẩy đủ data nhưng chưa có tác dụng tới tổng đài.
+   */
+  maxCallTimeSeconds?: number | null;
   batchSize: number;
   batchIntervalSeconds: number;
   variablePriority?: VariablePriority;
@@ -122,6 +128,8 @@ export interface CreateSessionRequest {
   retryConfig?: RetryConfig | null;
   /** [FR-008] 5–60 giây; không gửi = mặc định tổng đài. */
   ringTimeoutSeconds?: number | null;
+  /** [XFuture] 30–3600 giây tính từ lúc kết nối; không gửi = không giới hạn. */
+  maxCallTimeSeconds?: number | null;
   batchSize?: number;
   batchIntervalSeconds?: number;
   variablePriority?: VariablePriority;

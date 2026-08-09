@@ -15,13 +15,16 @@ export const LIMITS = {
   batchSize: { min: 1, max: 500 },
   batchIntervalSeconds: { min: 10, max: 3600 },
   ringTimeoutSeconds: { min: 5, max: 60 },
-  maxRetry: { min: 1, max: 10 },
+  maxCallTimeSeconds: { min: 30, max: 3600 },
+  // min = 0 chứ không phải 1: BE coi maxRetry = 0 là "TẮT gọi lại có chủ đích" (RetryConfig
+  // .firstInvalidReason cho phép [0,10]) — chặn ở 1 là FE từ chối một cấu hình BE nhận.
+  maxRetry: { min: 0, max: 10 },
   delaySeconds: { min: 30 },
 } as const;
 
 /** Thứ tự field = thứ tự focus khi có nhiều lỗi (trên xuống dưới đúng như layout). */
 export const FIELD_ORDER = [
-  'name', 'purpose', 'startTimeLocal', 'sipNumbers', 'ringTimeoutSeconds',
+  'name', 'purpose', 'startTimeLocal', 'sipNumbers', 'ringTimeoutSeconds', 'maxCallTimeSeconds',
   'scriptUuid', 'voiceOverride', 'distribution', 'rows',
 ] as const;
 
@@ -34,6 +37,7 @@ export interface ValidatableForm {
   sipNumbers: SipNumber[];
   scriptUuid: string;
   ringTimeoutSeconds: string;
+  maxCallTimeSeconds: string;
   distribution: {
     batchSize: number;
     batchIntervalSeconds: number;
@@ -89,6 +93,14 @@ export function validateForSubmit(form: ValidatableForm, activeRowCount: number)
     }
   }
 
+  if (form.maxCallTimeSeconds.trim()) {
+    const maxCall = Number(form.maxCallTimeSeconds);
+    const { min, max } = LIMITS.maxCallTimeSeconds;
+    if (!Number.isFinite(maxCall) || maxCall < min || maxCall > max) {
+      errors.maxCallTimeSeconds = `Thời lượng cuộc tối đa phải trong ${min}–${max} giây`;
+    }
+  }
+
   const distributionError = validateDistribution(form.distribution);
   if (distributionError) {
     errors.distribution = distributionError;
@@ -139,13 +151,18 @@ export function validateDistribution(distribution: ValidatableForm['distribution
     return 'Có hai khung giờ trùng nhau trong cùng một ngày — gộp lại cho rõ ràng';
   }
 
-  if (retryConfig) {
-    const { maxRetry, delaySeconds } = retryConfig;
+  // Bám đúng RetryConfig.firstInvalidReason() của BE: trigger rỗng = không cấu hình gọi lại
+  // (hợp lệ); delaySeconds chỉ bị đòi khi maxRetry > 0; BOT_ACTION bắt buộc có actionCodes.
+  if (retryConfig?.trigger) {
+    const { trigger, actionCodes, maxRetry, delaySeconds } = retryConfig;
     if (!Number.isFinite(maxRetry) || maxRetry < LIMITS.maxRetry.min || maxRetry > LIMITS.maxRetry.max) {
       return `Số lần gọi lại tối đa phải trong ${LIMITS.maxRetry.min}–${LIMITS.maxRetry.max}`;
     }
-    if (!Number.isFinite(delaySeconds) || delaySeconds < LIMITS.delaySeconds.min) {
+    if (maxRetry > 0 && (!Number.isFinite(delaySeconds) || delaySeconds < LIMITS.delaySeconds.min)) {
       return `Thời gian chờ gọi lại tối thiểu ${LIMITS.delaySeconds.min} giây`;
+    }
+    if (trigger === 'BOT_ACTION' && (actionCodes?.length ?? 0) === 0) {
+      return 'Gọi lại theo hành vi callbot phải chọn ít nhất 1 action';
     }
   }
 

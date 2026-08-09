@@ -147,15 +147,23 @@ export function DistributionModal({
                   className={inputClass} value={draft.retryConfig.maxRetry}
                   onChange={(e) => setDraft({ ...draft, retryConfig: { ...draft.retryConfig!, maxRetry: Number(e.target.value) } })} />
               </Field>
-              <Field label={`Gọi lại sau (≥ ${LIMITS.delaySeconds.min} giây, từ lúc cuộc kết thúc)`}>
+              <Field label={draft.retryConfig.maxRetry > 0
+                ? `Gọi lại sau (≥ ${LIMITS.delaySeconds.min} giây, từ lúc cuộc kết thúc)`
+                : 'Gọi lại sau (không áp dụng khi số lần = 0)'}>
                 <input type="number" min={LIMITS.delaySeconds.min}
                   className={inputClass} value={draft.retryConfig.delaySeconds}
                   onChange={(e) => setDraft({ ...draft, retryConfig: { ...draft.retryConfig!, delaySeconds: Number(e.target.value) } })} />
               </Field>
             </div>
           )}
+          {draft.retryConfig?.maxRetry === 0 && (
+            <p className="mt-2 text-xs text-(--color-muted)">
+              Số lần = 0 nghĩa là <b>tắt gọi lại</b> — backend hiểu đúng như vậy và sẽ không gọi lại lần nào.
+            </p>
+          )}
           <p className="mt-2 text-xs text-(--color-muted)">
-            Gọi lại theo hành vi bắt được từ callbot (BOT_ACTION) sẽ mở khi backend chốt danh mục action với team AI.
+            Gọi lại theo hành vi bắt được từ callbot (BOT_ACTION) backend đã dựng cho luồng automation,
+            nhưng <b>chưa nối cho phiên client</b> — chọn ở đây sẽ không gọi lại lần nào, nên chưa mở.
           </p>
         </div>
       </div>

@@ -49,7 +49,8 @@ const MOCK_SCRIPTS: CallbotScript[] = [
 ];
 
 /** Nhóm config core chỉ sửa được ở DRAFT (docs 01 §5); nhóm tunable sửa được khi chưa terminal. */
-const RUNTIME_TUNABLE_KEYS = new Set(['name', 'purpose', 'timeSlots', 'batchSize', 'batchIntervalSeconds', 'startTimeMs']);
+const RUNTIME_TUNABLE_KEYS = new Set(['name', 'purpose', 'timeSlots', 'batchSize', 'batchIntervalSeconds',
+  'startTimeMs', 'ringTimeoutSeconds', 'maxCallTimeSeconds']);
 
 function must(id: string): MockSessionState {
   const state = db().sessions.get(id);
@@ -106,6 +107,8 @@ export const mockGateway: CallbotGateway = {
       scriptUuid: req.scriptUuid ?? 'uuid-demo-script',
       voiceOverride: req.voiceOverride ?? null,
       retryConfig: req.retryConfig ?? null,
+      ringTimeoutSeconds: req.ringTimeoutSeconds ?? null,
+      maxCallTimeSeconds: req.maxCallTimeSeconds ?? null,
       batchSize: req.batchSize ?? 50,
       batchIntervalSeconds: req.batchIntervalSeconds ?? 30,
       variablePriority: req.variablePriority ?? 'SESSION_DATA_FIRST',
@@ -161,6 +164,28 @@ export const mockGateway: CallbotGateway = {
       case 'submit': {
         if (s.status !== 'DRAFT') throw new GatewayError('CS_INVALID_STATE', `Only DRAFT can be submitted, current: ${s.status}`);
         if (s.batchSize < 1 || s.batchSize > 500) throw new GatewayError('CS_INVALID_CONFIG', 'batchSize must be in [1,500]');
+        // Bound lấy đúng ClientSessionConfigValidator để mock trả cùng lỗi như BE thật.
+        if (s.ringTimeoutSeconds != null && (s.ringTimeoutSeconds < 5 || s.ringTimeoutSeconds > 60)) {
+          throw new GatewayError('CS_INVALID_CONFIG', 'ringTimeoutSeconds must be in [5,60]');
+        }
+        if (s.maxCallTimeSeconds != null && (s.maxCallTimeSeconds < 30 || s.maxCallTimeSeconds > 3600)) {
+          throw new GatewayError('CS_INVALID_CONFIG', 'maxCallTimeSeconds must be in [30,3600]');
+        }
+        // Bám RetryConfig.firstInvalidReason(): trigger rỗng = không cấu hình (hợp lệ),
+        // maxRetry = 0 là tắt có chủ đích, delaySeconds chỉ bị đòi khi maxRetry > 0.
+        if (s.retryConfig?.trigger) {
+          const { trigger, actionCodes, maxRetry, delaySeconds } = s.retryConfig;
+          if (maxRetry == null || maxRetry < 0 || maxRetry > 10) {
+            throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.maxRetry must be in [0,10]');
+          }
+          if (maxRetry > 0 && (delaySeconds == null || delaySeconds < 30)) {
+            throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.delaySeconds must be >= 30');
+          }
+          if (trigger === 'BOT_ACTION' && (actionCodes?.length ?? 0) === 0) {
+            throw new GatewayError('CS_INVALID_CONFIG',
+              'retryConfig.actionCodes must not be empty when trigger is BOT_ACTION');
+          }
+        }
         if (!state.rows.some((r) => r.rowStatus === 'STAGED')) throw new GatewayError('CS_NO_DATA', 'No STAGED data row to run');
         s.status = 'SCHEDULED';
         s.runtimeSessionId = `cs_${s.id}`;
@@ -499,6 +524,7 @@ export const mockGateway: CallbotGateway = {
       ...(req.copyConfig ? {} : {
         purpose: undefined, startTimeMs: null, timeSlots: [], retryConfig: null,
         batchSize: 50, batchIntervalSeconds: 30,
+        ringTimeoutSeconds: null, maxCallTimeSeconds: null,
       }),
       ...(req.overrides ?? {}),
     };

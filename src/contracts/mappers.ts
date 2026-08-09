@@ -31,6 +31,7 @@ export interface BeClientSession {
   voiceOverride?: string | null;
   retryConfig?: RetryConfig | null;
   ringTimeoutSeconds?: number | null;
+  maxCallTimeSeconds?: number | null;
   batchSize?: number;
   batchIntervalSeconds?: number;
   variablePriority?: VariablePriority;
@@ -219,6 +220,7 @@ export function mapClientSession(dto: BeClientSession): ClientSession {
     voiceOverride: dto.voiceOverride ?? null,
     retryConfig: dto.retryConfig ?? null,
     ringTimeoutSeconds: dto.ringTimeoutSeconds ?? null,
+    maxCallTimeSeconds: dto.maxCallTimeSeconds ?? null,
     batchSize: dto.batchSize ?? 50,
     batchIntervalSeconds: dto.batchIntervalSeconds ?? 30,
     variablePriority: dto.variablePriority,

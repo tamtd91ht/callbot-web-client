@@ -165,6 +165,26 @@ tương tự cách web-v2 lấy danh sách agent.
 
 ---
 
+## 12. `BOT_ACTION` chạy được ở luồng automation nhưng KHÔNG chạy cho phiên client
+
+**Hiện trạng** (merge `87363fa` "retry v2", 2026-08-09). BE đã dựng `EngineBotActionRetryService` +
+consumer `call_bot_ai_action_event`, nhưng chỉ luồng A (automation/API) dùng được: với phiên client
+`ClientRuntimeSessionFactory` ép `numberRetryCall = 0` cho `BOT_ACTION` và **không set `retryConfig`
+lên runtime session** → service bỏ qua phiên luồng B. Chọn `BOT_ACTION` ở web client = **không gọi
+lại lần nào, im lặng** (luồng A ít nhất có log WARN, luồng B chưa có).
+
+Kèm theo, chính CHANGELOG của BE ghi nhận cuộc **gọi lại** của luồng B không mang
+`ringTimeout`/`maxCallTime` — retry đi qua `CallBotHandler.processPBXCallByRecords`, hàm này đọc từ
+`CallBotSession` mà factory không set 2 field đó (dispatcher truyền theo từng tick).
+
+**FE đang lách.** Không mở lựa chọn `BOT_ACTION` trong modal Phân bổ, và nói thẳng lý do trên UI
+thay vì để trống. Mock simulator cũng chỉ gọi lại với `NO_ANSWER` — cố ý giữ mock "tệ" đúng bằng BE.
+
+**Cần BE.** Map `retryConfig` vào runtime session ở `ClientRuntimeSessionFactory`. Lưu ý đánh đổi BE
+đã nêu: `retryConfig` không nằm trong `RUNTIME_TUNABLE` nên giá trị sẽ đông cứng tại thời điểm submit.
+
+---
+
 ## Ghi chú thêm: mã lỗi là prefix trong `message`
 
 Lỗi nghiệp vụ trả về dạng `"CS_XXX: mô tả"` trong `message`, **không có field `errorCode` riêng**,
