@@ -194,9 +194,14 @@ Cảnh báo kèm: tenant-config-api **chỉ có route internal GHI**, không có
 **Cờ an toàn.** Đường gọi lại mới nằm sau `callbot.client-session.retry.call-result.enabled`,
 **mặc định `false`**. Tắt = giữ nguyên hành vi đang chạy trên prod.
 
-**FE đang làm gì.** Modal Phân bổ cho chọn trigger (`CONTACT_*` để `disabled` kèm chữ "chưa hỗ trợ")
-và chọn `actionCodes` (chỉ `NO_ANSWER` bật, còn lại `disabled`). Mock simulator cũng chỉ gọi lại với
-`CALL_STATUS` + `NO_ANSWER` — cố ý giữ mock "tệ" đúng bằng BE.
+**FE đang làm gì.** Modal Phân bổ cho chọn trigger: `CALL_STATUS` và `CONTACT_STATUS` bật, chỉ
+`CONTACT_ATTRIBUTE` còn `disabled` kèm chữ "chưa hỗ trợ". Với `CALL_STATUS` thì chọn `actionCodes`
+(chỉ `NO_ANSWER` bật, còn lại `disabled`); với `CONTACT_STATUS` thì chọn từ danh mục thật của tenant.
+Mock simulator vẫn chỉ gọi lại với `CALL_STATUS` + `NO_ANSWER` — cố ý giữ mock "tệ" đúng bằng BE.
+
+Câu cảnh báo "backend chỉ thực thi khi không nghe máy" nay **chỉ hiện với `CALL_STATUS`**. Trước đó
+nó hiện với mọi trigger và còn nói cả trạng thái khách hàng "sẽ mở dần" — người dùng vừa chọn xong
+trạng thái khách thì đọc ngay bên dưới thấy bảo chưa hỗ trợ. Giới hạn nào thì nói đúng lúc đó.
 
 **Đã sửa ở đợt này (không còn là nợ):** cuộc gọi lại của luồng B giờ CÓ mang
 `ringTimeout`/`maxCallTime` (factory set 2 field lên `CallBotSession`); counters

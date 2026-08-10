@@ -255,10 +255,15 @@ export function DistributionModal({
               Số lần = 0 nghĩa là <b>tắt gọi lại</b> — backend hiểu đúng như vậy và sẽ không gọi lại lần nào.
             </p>
           )}
-          <p className="mt-2 text-xs text-(--color-muted)">
-            Hiện backend chỉ thực thi gọi lại khi <b>không nghe máy</b>. Các kết quả khác và gọi lại
-            theo thuộc tính / trạng thái khách hàng sẽ mở dần.
-          </p>
+          {/* Cảnh báo bám theo TRIGGER ĐANG CHỌN. Bản trước viết chung một câu cho mọi trigger
+              ("trạng thái khách hàng sẽ mở dần") và không được sửa khi CONTACT_STATUS chạy thật —
+              hệ quả: người dùng vừa chọn xong trạng thái khách thì đọc ngay bên dưới thấy bảo chưa
+              hỗ trợ, tưởng cấu hình mình vừa làm là vô nghĩa. Giới hạn nào thì nói đúng lúc đó. */}
+          {draft.retryConfig?.trigger === 'CALL_STATUS' && (
+            <p className="mt-2 text-xs text-(--color-muted)">
+              Hiện backend chỉ thực thi gọi lại khi <b>không nghe máy</b>. Các kết quả khác sẽ mở dần.
+            </p>
+          )}
         </div>
       </div>
     </Modal>
