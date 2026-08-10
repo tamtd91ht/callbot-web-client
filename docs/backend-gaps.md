@@ -165,23 +165,49 @@ tương tự cách web-v2 lấy danh sách agent.
 
 ---
 
-## 12. `BOT_ACTION` chạy được ở luồng automation nhưng KHÔNG chạy cho phiên client
+## 12. Gọi lại — chỉ thực thi được `NO_ANSWER`; `CONTACT_*` mới là khung
 
-**Hiện trạng** (merge `87363fa` "retry v2", 2026-08-09). BE đã dựng `EngineBotActionRetryService` +
-consumer `call_bot_ai_action_event`, nhưng chỉ luồng A (automation/API) dùng được: với phiên client
-`ClientRuntimeSessionFactory` ép `numberRetryCall = 0` cho `BOT_ACTION` và **không set `retryConfig`
-lên runtime session** → service bỏ qua phiên luồng B. Chọn `BOT_ACTION` ở web client = **không gọi
-lại lần nào, im lặng** (luồng A ít nhất có log WARN, luồng B chưa có).
+**Cập nhật 2026-08-10.** Mô hình `RetryTrigger` cũ (`NO_ANSWER` / `BOT_ACTION`, merge `87363fa`) đã
+được **revert** và thay bằng `CALL_STATUS` / `CONTACT_ATTRIBUTE` / `CONTACT_STATUS`; điều kiện cụ thể
+tụt xuống `actionCodes` (list string mở). Mục này viết lại theo hiện trạng mới.
 
-Kèm theo, chính CHANGELOG của BE ghi nhận cuộc **gọi lại** của luồng B không mang
-`ringTimeout`/`maxCallTime` — retry đi qua `CallBotHandler.processPBXCallByRecords`, hàm này đọc từ
-`CallBotSession` mà factory không set 2 field đó (dispatcher truyền theo từng tick).
+**Chỉ `CALL_STATUS` + mã `NO_ANSWER` là thật sự gọi lại.** Đây là giới hạn CẤU TRÚC của engine cũ,
+không phải thiếu cấu hình: `CallBotHandler.appendRecordsRetryCall` chỉ được gọi từ đúng một chỗ —
+`handlerNoAnswerCallback` (:1149); `handlerAnsweredCallback` (:1077) không gọi retry. Nên mọi mã ứng
+với cuộc CÓ nghe máy (`ANSWER`, `VOICE_MAIL`, `BUSY`) hiện nhận vào nhưng **không gọi lại lần nào**.
 
-**FE đang lách.** Không mở lựa chọn `BOT_ACTION` trong modal Phân bổ, và nói thẳng lý do trên UI
-thay vì để trống. Mock simulator cũng chỉ gọi lại với `NO_ANSWER` — cố ý giữ mock "tệ" đúng bằng BE.
+**`CONTACT_ATTRIBUTE` / `CONTACT_STATUS` chưa nối.** BE mới có interface `ContactAttributeProvider` +
+bản `Unavailable` luôn trả rỗng kèm log WARN. Lý do: giá trị thuộc tính từng KH nằm ở
+**contact-service** (`contact-v1`), repo không có trong workspace nên chưa đọc được contract. Danh mục
+thì đã biết chỗ lấy: `POST {tenantConfig}/contact-categories/search-all` (và `/business`, `/tag`).
+Cảnh báo kèm: tenant-config-api **chỉ có route internal GHI**, không có route internal ĐỌC.
 
-**Cần BE.** Map `retryConfig` vào runtime session ở `ClientRuntimeSessionFactory`. Lưu ý đánh đổi BE
-đã nêu: `retryConfig` không nằm trong `RUNTIME_TUNABLE` nên giá trị sẽ đông cứng tại thời điểm submit.
+**Cờ an toàn.** Đường gọi lại mới nằm sau `callbot.client-session.retry.call-result.enabled`,
+**mặc định `false`**. Tắt = giữ nguyên hành vi đang chạy trên prod.
+
+**FE đang làm gì.** Modal Phân bổ cho chọn trigger (`CONTACT_*` để `disabled` kèm chữ "chưa hỗ trợ")
+và chọn `actionCodes` (chỉ `NO_ANSWER` bật, còn lại `disabled`). Mock simulator cũng chỉ gọi lại với
+`CALL_STATUS` + `NO_ANSWER` — cố ý giữ mock "tệ" đúng bằng BE.
+
+**Đã sửa ở đợt này (không còn là nợ):** cuộc gọi lại của luồng B giờ CÓ mang
+`ringTimeout`/`maxCallTime` (factory set 2 field lên `CallBotSession`); counters
+`answered/noAnswer/failed/canceled/retried` đã được ghi thật thay vì luôn bằng 0.
+
+### 12b. `sanitizeConfig` nuốt `retryConfig: null` → không tắt được gọi lại qua update
+
+`mappers.ts:392` loại mọi key `null`/`undefined` trước khi gửi, nên `update({retryConfig: null})`
+không bao giờ tới BE — người dùng bỏ tick "Gọi lại tự động" ở phiên đã tạo thì cấu hình cũ **vẫn còn**.
+Cách tắt hiện tại là gửi `maxRetry: 0` (BE hiểu đúng là tắt có chủ đích). Sửa triệt để cần BE cho phép
+`null` tường minh hoặc FE có đường riêng để xoá field.
+
+### 12c. Wrapper KHÔNG đọc `ringTimeout` / `maxCallTime` (đã đọc code, xác nhận)
+
+`wrapper-auto-call-service` **hard-code** `originate_timeout=60` và `call_timeout=20` trong tham số
+originate (`AutoCallService.java:457,547,760,850,1114,1133,1352,1365,1582,1595`) và **không có field
+nào** trong `BaseRequest`/`CallBotRequest` nhận 2 giá trị này. Nghĩa là cấu hình "Chờ kết nối" và
+"Thời lượng cuộc tối đa" người dùng nhập ở UI **hiện không tới được FreeSWITCH** dù BE gửi đủ.
+Cần làm việc với team wrapper. Xác nhận thêm: wrapper **không tự retry** (1 message = 1 lần originate)
+và **không biết hangup cause** (do `lua hangup_hook.lua` trên FreeSWITCH, ngoài repo).
 
 ---
 

@@ -4,7 +4,7 @@
  * batchSize + batchIntervalSeconds (phân bổ), timeSlots (khung giờ), retryConfig (gọi lại).
  */
 import { useState } from 'react';
-import type { RetryConfig, TimeSlot } from '@/contracts/types';
+import type { RetryConfig, RetryTrigger, TimeSlot } from '@/contracts/types';
 import { LIMITS, validateDistribution } from '@/lib/validation';
 import { Button, Field, Modal, inputClass } from '../ui';
 
@@ -135,11 +135,29 @@ export function DistributionModal({
               onChange={(e) => setDraft({
                 ...draft,
                 retryConfig: e.target.checked
-                  ? { trigger: 'NO_ANSWER', maxRetry: 1, delaySeconds: 60 }
+                  // Mặc định đúng cái BE chạy được: kết quả cuộc gọi + không nghe máy.
+                  ? { trigger: 'CALL_STATUS', actionCodes: ['NO_ANSWER'], maxRetry: 1, delaySeconds: 60 }
                   : null,
               })} />
-            Gọi lại khi không nghe máy
+            Gọi lại tự động
           </label>
+          {draft.retryConfig && (
+            <div className="mt-3">
+              <Field label="Gọi lại theo">
+                <select className={inputClass} value={draft.retryConfig.trigger}
+                  onChange={(e) => setDraft({
+                    ...draft,
+                    retryConfig: { ...draft.retryConfig!, trigger: e.target.value as RetryTrigger },
+                  })}>
+                  <option value="CALL_STATUS">Kết quả cuộc gọi</option>
+                  {/* CONTACT_* mới là khung ở BE — chưa nối contact-service, chọn vào là không gọi
+                      lại lần nào. Khoá hẳn thay vì để người dùng cấu hình rồi chờ trong vô vọng. */}
+                  <option value="CONTACT_ATTRIBUTE" disabled>Thuộc tính khách hàng (chưa hỗ trợ)</option>
+                  <option value="CONTACT_STATUS" disabled>Trạng thái khách hàng (chưa hỗ trợ)</option>
+                </select>
+              </Field>
+            </div>
+          )}
           {draft.retryConfig && (
             <div className="mt-3 grid grid-cols-2 gap-3">
               <Field label={`Số lần gọi lại tối đa (${LIMITS.maxRetry.min}–${LIMITS.maxRetry.max})`}>
@@ -156,14 +174,39 @@ export function DistributionModal({
               </Field>
             </div>
           )}
+          {draft.retryConfig?.trigger === 'CALL_STATUS' && draft.retryConfig.maxRetry > 0 && (
+            <div className="mt-3">
+              <Field label="Gọi lại khi kết quả là">
+                <div className="flex flex-wrap items-center gap-3">
+                  {CALL_STATUS_CODES.map(({ code, label, supported }) => {
+                    const checked = (draft.retryConfig?.actionCodes ?? []).includes(code);
+                    return (
+                      <label key={code}
+                        className={`flex items-center gap-1.5 text-sm ${supported ? '' : 'text-(--color-muted)'}`}>
+                        <input type="checkbox" checked={checked} disabled={!supported}
+                          onChange={() => setDraft({
+                            ...draft,
+                            retryConfig: {
+                              ...draft.retryConfig!,
+                              actionCodes: toggleCode(draft.retryConfig?.actionCodes, code),
+                            },
+                          })} />
+                        {label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </Field>
+            </div>
+          )}
           {draft.retryConfig?.maxRetry === 0 && (
             <p className="mt-2 text-xs text-(--color-muted)">
               Số lần = 0 nghĩa là <b>tắt gọi lại</b> — backend hiểu đúng như vậy và sẽ không gọi lại lần nào.
             </p>
           )}
           <p className="mt-2 text-xs text-(--color-muted)">
-            Gọi lại theo hành vi bắt được từ callbot (BOT_ACTION) backend đã dựng cho luồng automation,
-            nhưng <b>chưa nối cho phiên client</b> — chọn ở đây sẽ không gọi lại lần nào, nên chưa mở.
+            Hiện backend chỉ thực thi gọi lại khi <b>không nghe máy</b>. Các kết quả khác và gọi lại
+            theo thuộc tính / trạng thái khách hàng sẽ mở dần.
           </p>
         </div>
       </div>
@@ -173,6 +216,28 @@ export function DistributionModal({
   function updateSlot(index: number, slot: TimeSlot) {
     setDraft({ ...draft, timeSlots: draft.timeSlots.map((s, i) => (i === index ? slot : s)) });
   }
+}
+
+/**
+ * Danh mục kết quả cuộc gọi để chọn điều kiện gọi lại.
+ *
+ * `supported` bám đúng khả năng THẬT của backend, không phải mong muốn: engine cũ chỉ có một đường
+ * gọi lại và nó nằm ở nhánh không-nghe-máy, nên các mã còn lại nhận vào cũng không gọi lại lần nào.
+ * Hiện đúng — chứ không mở sẵn rồi để người dùng chờ một cuộc gọi không bao giờ tới.
+ * Mở thêm mã: đổi `supported` ở đây SAU KHI backend thực thi được mã đó.
+ */
+const CALL_STATUS_CODES: { code: string; label: string; supported: boolean }[] = [
+  { code: 'NO_ANSWER', label: 'Không nghe máy', supported: true },
+  { code: 'ANSWER', label: 'Có nghe máy (chưa hỗ trợ)', supported: false },
+  { code: 'VOICE_MAIL', label: 'Hộp thư thoại (chưa hỗ trợ)', supported: false },
+  { code: 'BUSY', label: 'Máy bận (chưa hỗ trợ)', supported: false },
+];
+
+/** Bật/tắt một mã kết quả. Giữ thứ tự theo danh mục để payload ổn định giữa các lần sửa. */
+function toggleCode(actionCodes: string[] | undefined, code: string): string[] {
+  const current = actionCodes ?? [];
+  const next = current.includes(code) ? current.filter((c) => c !== code) : [...current, code];
+  return CALL_STATUS_CODES.map((c) => c.code).filter((c) => next.includes(c));
 }
 
 /** Bật/tắt 1 ngày. daysOfWeek chưa có (slot cũ) = đang chọn cả 7 → bắt đầu từ đủ 7 rồi bỏ ngày này. */

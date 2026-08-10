@@ -7,6 +7,7 @@
  * đầu số nào, kịch bản nào, mỗi lần bao nhiêu cuộc" mà KHÔNG phải mở lại màn cấu hình.
  */
 import type { ClientSession } from '@/contracts/types';
+import { describeRetryCondition } from '@/lib/retryLabels';
 import { daysLabel } from './DistributionModal';
 
 export function SessionConfigPanel({
@@ -38,9 +39,9 @@ export function SessionConfigPanel({
                   return `${slot.from}–${slot.to}${days ? ` (${days})` : ''}`;
                 }).join(' · ')
               : 'Cả ngày'} />
-          <Row label="Gọi lại khi không nghe máy"
+          <Row label="Gọi lại tự động"
             value={retry
-              ? `Tối đa ${retry.maxRetry} lần, cách ${retry.delaySeconds}s`
+              ? `${describeRetryCondition(retry)} — tối đa ${retry.maxRetry} lần, cách ${retry.delaySeconds}s`
               : 'Không'} />
           <Row label="Chờ kết nối"
             value={session.ringTimeoutSeconds ? `${session.ringTimeoutSeconds}s` : 'Mặc định tổng đài'} />

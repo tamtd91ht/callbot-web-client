@@ -152,17 +152,19 @@ export function validateDistribution(distribution: ValidatableForm['distribution
   }
 
   // Bám đúng RetryConfig.firstInvalidReason() của BE: trigger rỗng = không cấu hình gọi lại
-  // (hợp lệ); delaySeconds chỉ bị đòi khi maxRetry > 0; BOT_ACTION bắt buộc có actionCodes.
+  // (hợp lệ); delaySeconds chỉ bị đòi khi maxRetry > 0; actionCodes bắt buộc với MỌI trigger
+  // (bản cũ chỉ đòi với BOT_ACTION) — nhưng chỉ khi maxRetry > 0, vì maxRetry = 0 là tắt gọi lại
+  // có chủ đích, lúc đó hỏi "gọi lại khi nào" là vô nghĩa và sẽ chặn oan.
   if (retryConfig?.trigger) {
-    const { trigger, actionCodes, maxRetry, delaySeconds } = retryConfig;
+    const { actionCodes, maxRetry, delaySeconds } = retryConfig;
     if (!Number.isFinite(maxRetry) || maxRetry < LIMITS.maxRetry.min || maxRetry > LIMITS.maxRetry.max) {
       return `Số lần gọi lại tối đa phải trong ${LIMITS.maxRetry.min}–${LIMITS.maxRetry.max}`;
     }
     if (maxRetry > 0 && (!Number.isFinite(delaySeconds) || delaySeconds < LIMITS.delaySeconds.min)) {
       return `Thời gian chờ gọi lại tối thiểu ${LIMITS.delaySeconds.min} giây`;
     }
-    if (trigger === 'BOT_ACTION' && (actionCodes?.length ?? 0) === 0) {
-      return 'Gọi lại theo hành vi callbot phải chọn ít nhất 1 action';
+    if (maxRetry > 0 && (actionCodes?.length ?? 0) === 0) {
+      return 'Phải chọn ít nhất 1 điều kiện gọi lại';
     }
   }
 

@@ -15,7 +15,13 @@ export type ClientDataSource =
   // nguồn LUỒNG CŨ — chỉ xuất hiện khi real mode xem phiên cũ trên stg (read-only)
   | 'WEB' | 'API' | 'CAMPAIGN';
 export type DedupeMode = 'NONE' | 'PHONE' | 'FIELD';
-export type RetryTrigger = 'NO_ANSWER' | 'BOT_ACTION';
+/**
+ * Điều kiện kích hoạt gọi lại. Thay cho bản cũ `'NO_ANSWER' | 'BOT_ACTION'` (đổi 2026-08-10):
+ * điều kiện cụ thể tụt xuống `actionCodes` (list string MỞ) để thêm mã mới không phải đổi type.
+ * `NO_ANSWER` vì thế giờ là một GIÁ TRỊ của actionCodes, không còn là trigger.
+ * CONTACT_* mới là khung ở BE — chưa gọi lại lần nào, đừng mở cho người dùng chọn.
+ */
+export type RetryTrigger = 'CALL_STATUS' | 'CONTACT_ATTRIBUTE' | 'CONTACT_STATUS';
 export type VariablePriority = 'SESSION_DATA_FIRST' | 'CRM_CONTACT_FIRST';
 export type AppendMode = 'RUN_NOW' | 'RUN_AFTER';
 

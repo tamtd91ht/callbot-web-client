@@ -297,8 +297,13 @@ export function mapOldSession(dto: OldSessionDTO): ClientSession {
     scriptId: dto.scriptId,
     scriptUuid: dto.scriptUUID,
     voiceOverride: dto.voice ?? null,
+    // Phiên LUỒNG CŨ chỉ có 2 field dẫn xuất; dựng lại dạng mới để UI hiển thị chung một kiểu.
+    // Luồng cũ chỉ biết gọi lại khi không nghe máy nên actionCodes luôn đúng một giá trị.
     retryConfig: dto.numberRetryCall && dto.numberRetryCall > 0
-      ? { trigger: 'NO_ANSWER', maxRetry: dto.numberRetryCall, delaySeconds: dto.retryCallAfterSeconds ?? 0 }
+      ? {
+        trigger: 'CALL_STATUS', actionCodes: ['NO_ANSWER'],
+        maxRetry: dto.numberRetryCall, delaySeconds: dto.retryCallAfterSeconds ?? 0,
+      }
       : null,
     batchSize: 0,
     batchIntervalSeconds: 0,

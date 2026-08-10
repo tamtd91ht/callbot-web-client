@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { ClientSession, DataRow, SipNumber, UpdateSessionRequest } from '@/contracts/types';
 import { ApiError } from '@/lib/apiClient';
+import { describeRetryCondition } from '@/lib/retryLabels';
 import { sessionApi } from '@/lib/sessionApi';
 import { Button, Card, Field, inputClass } from '../ui';
 import { AddCustomerDrawer } from './AddCustomerDrawer';
@@ -399,10 +400,11 @@ export function CreateSessionScreen() {
                 <span className={summary.retryOn ? 'text-(--color-primary-dark)' : 'text-(--color-danger)'}>
                   {summary.retryOn ? '✔' : '⊗'}
                 </span>
-                Gọi lại khi không nghe máy
+                Gọi lại tự động
                 {summary.retryOn && form.distribution.retryConfig && (
                   <span className="text-(--color-muted)">
-                    — tối đa {form.distribution.retryConfig.maxRetry} lần, sau {form.distribution.retryConfig.delaySeconds}s
+                    — {describeRetryCondition(form.distribution.retryConfig).toLowerCase()},
+                    tối đa {form.distribution.retryConfig.maxRetry} lần, sau {form.distribution.retryConfig.delaySeconds}s
                   </span>
                 )}
               </div>

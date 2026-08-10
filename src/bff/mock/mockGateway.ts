@@ -181,9 +181,9 @@ export const mockGateway: CallbotGateway = {
           if (maxRetry > 0 && (delaySeconds == null || delaySeconds < 30)) {
             throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.delaySeconds must be >= 30');
           }
-          if (trigger === 'BOT_ACTION' && (actionCodes?.length ?? 0) === 0) {
-            throw new GatewayError('CS_INVALID_CONFIG',
-              'retryConfig.actionCodes must not be empty when trigger is BOT_ACTION');
+          // actionCodes bắt buộc với MỌI trigger (BE đổi 2026-08-10), nhưng chỉ khi maxRetry > 0.
+          if (maxRetry > 0 && (actionCodes?.length ?? 0) === 0) {
+            throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.actionCodes must not be empty');
           }
         }
         if (!state.rows.some((r) => r.rowStatus === 'STAGED')) throw new GatewayError('CS_NO_DATA', 'No STAGED data row to run');

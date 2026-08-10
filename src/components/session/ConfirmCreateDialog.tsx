@@ -7,6 +7,7 @@
  * Nên bắt buộc người dùng đọc lại tóm tắt: gọi cho bao nhiêu người, bằng đầu số nào, kịch bản nào.
  */
 import type { RetryConfig, SipNumber, TimeSlot } from '@/contracts/types';
+import { describeRetryCondition } from '@/lib/retryLabels';
 import { Button, Modal } from '../ui';
 import { daysLabel } from './DistributionModal';
 
@@ -77,9 +78,9 @@ export function ConfirmCreateDialog({
           {summary.maxCallTimeSeconds != null && (
             <Row label="Thời lượng cuộc tối đa" value={`${summary.maxCallTimeSeconds}s`} />
           )}
-          <Row label="Gọi lại khi không nghe máy"
+          <Row label="Gọi lại tự động"
             value={summary.retryConfig
-              ? `Có — tối đa ${summary.retryConfig.maxRetry} lần, cách ${summary.retryConfig.delaySeconds}s`
+              ? `${describeRetryCondition(summary.retryConfig)} — tối đa ${summary.retryConfig.maxRetry} lần, cách ${summary.retryConfig.delaySeconds}s`
               : 'Không'} />
         </div>
 
