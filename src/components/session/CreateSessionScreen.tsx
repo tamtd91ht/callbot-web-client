@@ -267,6 +267,8 @@ export function CreateSessionScreen() {
   const summary = distributionSummary(form.distribution);
   const countBySource = (src: string) => activeRows.filter((r) => r.source === src).length;
   const scriptName = scriptLabel(form.scriptUuid, catalogs.scripts);
+  /** Tra mã trạng thái khách ("1", "1-1") → tên, để phần tóm tắt không phơi mã thô cho người dùng. */
+  const contactStatusNames = new Map(catalogs.contactStatuses.map((s) => [s.code, s.name]));
   const scriptChangedAfterLoad = !!scriptAtLoad && scriptAtLoad !== form.scriptUuid && activeRows.length > 0;
 
   const confirmSummary: ConfirmCreateSummary = {
@@ -403,7 +405,7 @@ export function CreateSessionScreen() {
                 Gọi lại tự động
                 {summary.retryOn && form.distribution.retryConfig && (
                   <span className="text-(--color-muted)">
-                    — {describeRetryCondition(form.distribution.retryConfig).toLowerCase()},
+                    — {describeRetryCondition(form.distribution.retryConfig, contactStatusNames).toLowerCase()},
                     tối đa {form.distribution.retryConfig.maxRetry} lần, sau {form.distribution.retryConfig.delaySeconds}s
                   </span>
                 )}
@@ -458,6 +460,7 @@ export function CreateSessionScreen() {
       </div>
 
       <DistributionModal open={distributionOpen} value={form.distribution}
+        contactStatuses={catalogs.contactStatuses}
         onClose={() => setDistributionOpen(false)}
         onSave={(v) => patch({ distribution: v })} />
 

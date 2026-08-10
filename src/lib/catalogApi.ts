@@ -308,6 +308,81 @@ function mapClassifyRow(row: Record<string, unknown>): ClassifyOption | null {
   };
 }
 
+/* ============================== Trạng thái khách hàng (filter-contact) ============================== */
+
+/**
+ * Một trạng thái khách để chọn làm điều kiện gọi lại.
+ *
+ * ⚠️ `code` KHÔNG phải id — nó là điểm nối `index`/`secondIndex` mà BE dùng để so với
+ * `filterContacts` của khách: `"1"` = cấp 1 index 1 (khớp mọi cấp con), `"1-1"` = đúng cấp 1 index 1
+ * VÀ cấp 2 index 1. Gửi id lên là BE không khớp được gì cả.
+ */
+export interface ContactStatusOption {
+  /** Mã gửi lên BE: "1" hoặc "1-1". */
+  code: string;
+  /** Nhãn hiển thị, ghép "Cha › Con" cho cấp 2 để người dùng biết mình chọn nhánh nào. */
+  name: string;
+  color?: string;
+  /** true = cấp 2 (có secondIndex) — dùng để thụt lề trong danh sách. */
+  isSecondLevel?: boolean;
+}
+
+/**
+ * Danh mục trạng thái khách hàng, dùng cho retry trigger `CONTACT_STATUS`.
+ *
+ * Endpoint là `POST /filter-contact/list` — KHÔNG phải `search-all` như mấy danh mục phân loại khác
+ * (tag/nhóm KH/ngành nghề). Router tenant-config chỉ đăng ký get-by-id/search/list/add/update/delete
+ * cho prefix này.
+ *
+ * Cấu trúc: `values[]` là cấp 1 (`index`, `name`), mỗi phần tử có thể có `second_level[]` là cấp 2
+ * (cũng `index`, `name`). Đối chiếu cách web-v2 đọc: `CustomerStatusList.js:24-28`.
+ */
+export async function fetchContactStatuses(): Promise<CatalogResult<ContactStatusOption>> {
+  const payload = await call(`${TENANT_CONFIG_BASE}/filter-contact/list?${QUERY}`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+  const rows = pickList(payload);
+  if (!rows) return { items: [], unparsed: sample(payload) };
+  const items: ContactStatusOption[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const values = (row as Record<string, unknown>).values;
+    if (!Array.isArray(values)) continue;
+    for (const level1 of values) {
+      if (!level1 || typeof level1 !== 'object') continue;
+      const l1 = level1 as Record<string, unknown>;
+      const index = num(l1.index);
+      const name = str(l1, 'name');
+      if (index === null || !name) continue;
+      items.push({ code: String(index), name, color: str(l1, 'color') || undefined });
+      const secondLevel = l1.second_level ?? l1.secondLevel;
+      if (!Array.isArray(secondLevel)) continue;
+      for (const level2 of secondLevel) {
+        if (!level2 || typeof level2 !== 'object') continue;
+        const l2 = level2 as Record<string, unknown>;
+        const secondIndex = num(l2.index);
+        const secondName = str(l2, 'name');
+        if (secondIndex === null || !secondName) continue;
+        items.push({
+          code: `${index}-${secondIndex}`,
+          name: `${name} › ${secondName}`,
+          color: str(l2, 'color') || undefined,
+          isSecondLevel: true,
+        });
+      }
+    }
+  }
+  return items.length ? { items } : { items: [], unparsed: sample(payload) };
+}
+
+function num(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  return null;
+}
+
 /* ============================== Prefix mã quốc gia ============================== */
 
 /**

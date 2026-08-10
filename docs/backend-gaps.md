@@ -176,7 +176,16 @@ không phải thiếu cấu hình: `CallBotHandler.appendRecordsRetryCall` chỉ
 `handlerNoAnswerCallback` (:1149); `handlerAnsweredCallback` (:1077) không gọi retry. Nên mọi mã ứng
 với cuộc CÓ nghe máy (`ANSWER`, `VOICE_MAIL`, `BUSY`) hiện nhận vào nhưng **không gọi lại lần nào**.
 
-**`CONTACT_ATTRIBUTE` / `CONTACT_STATUS` chưa nối.** BE mới có interface `ContactAttributeProvider` +
+**CẬP NHẬT 2026-08-10: `CONTACT_STATUS` đã chạy được.** BE so `actionCodes` với `filterContacts` của
+khách (tra contact ES theo `contactId`, thiếu thì fallback `phoneNumber`). Mã lấy từ tenant-config
+`POST /filter-contact/list`: `values[].index` → `"1"`, `values[].second_level[].index` → `"1-1"`.
+FE đã mở lựa chọn này kèm danh mục thật. `CONTACT_ATTRIBUTE` vẫn khoá — BE đi chung đường nhưng
+**chưa có danh mục thuộc tính riêng** để người dùng chọn.
+
+⚠️ **Mock KHÔNG mô phỏng `CONTACT_STATUS`** (store mock không có trạng thái khách) — chọn trigger đó
+ở mock sẽ không thấy gọi lại. Muốn kiểm chứng phải chạy real mode.
+
+**(Cũ — giữ làm lịch sử) `CONTACT_ATTRIBUTE` / `CONTACT_STATUS` chưa nối.** BE mới có interface `ContactAttributeProvider` +
 bản `Unavailable` luôn trả rỗng kèm log WARN. Lý do: giá trị thuộc tính từng KH nằm ở
 **contact-service** (`contact-v1`), repo không có trong workspace nên chưa đọc được contract. Danh mục
 thì đã biết chỗ lấy: `POST {tenantConfig}/contact-categories/search-all` (và `/business`, `/tag`).

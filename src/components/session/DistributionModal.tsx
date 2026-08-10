@@ -5,6 +5,7 @@
  */
 import { useState } from 'react';
 import type { RetryConfig, RetryTrigger, TimeSlot } from '@/contracts/types';
+import type { ContactStatusOption } from '@/lib/catalogApi';
 import { LIMITS, validateDistribution } from '@/lib/validation';
 import { Button, Field, Modal, inputClass } from '../ui';
 
@@ -42,8 +43,15 @@ export function distributionSummary(v: DistributionValue): { line1: string; line
 }
 
 export function DistributionModal({
-  open, value, onClose, onSave,
-}: { open: boolean; value: DistributionValue; onClose: () => void; onSave: (v: DistributionValue) => void }) {
+  open, value, onClose, onSave, contactStatuses = [],
+}: {
+  open: boolean;
+  value: DistributionValue;
+  onClose: () => void;
+  onSave: (v: DistributionValue) => void;
+  /** Danh mục trạng thái khách (tenant-config /filter-contact/list) — chỉ dùng cho CONTACT_STATUS. */
+  contactStatuses?: ContactStatusOption[];
+}) {
   const [draft, setDraft] = useState<DistributionValue>(value);
   const [error, setError] = useState<string | null>(null);
 
@@ -147,13 +155,20 @@ export function DistributionModal({
                 <select className={inputClass} value={draft.retryConfig.trigger}
                   onChange={(e) => setDraft({
                     ...draft,
-                    retryConfig: { ...draft.retryConfig!, trigger: e.target.value as RetryTrigger },
+                    retryConfig: {
+                      ...draft.retryConfig!,
+                      trigger: e.target.value as RetryTrigger,
+                      // XOÁ actionCodes khi đổi trigger: mã của CALL_STATUS ("NO_ANSWER") và của
+                      // CONTACT_STATUS ("1", "1-1") thuộc hai danh mục khác hẳn nhau. Giữ lại là
+                      // gửi lên BE một cấu hình không bao giờ khớp được gì.
+                      actionCodes: [],
+                    },
                   })}>
                   <option value="CALL_STATUS">Kết quả cuộc gọi</option>
-                  {/* CONTACT_* mới là khung ở BE — chưa nối contact-service, chọn vào là không gọi
-                      lại lần nào. Khoá hẳn thay vì để người dùng cấu hình rồi chờ trong vô vọng. */}
+                  <option value="CONTACT_STATUS">Trạng thái khách hàng</option>
+                  {/* CONTACT_ATTRIBUTE: BE đi chung đường với CONTACT_STATUS nhưng chưa có danh mục
+                      thuộc tính riêng để chọn — mở ra thì người dùng không biết điền gì. */}
                   <option value="CONTACT_ATTRIBUTE" disabled>Thuộc tính khách hàng (chưa hỗ trợ)</option>
-                  <option value="CONTACT_STATUS" disabled>Trạng thái khách hàng (chưa hỗ trợ)</option>
                 </select>
               </Field>
             </div>
@@ -199,6 +214,42 @@ export function DistributionModal({
               </Field>
             </div>
           )}
+          {draft.retryConfig?.trigger === 'CONTACT_STATUS' && draft.retryConfig.maxRetry > 0 && (
+            <div className="mt-3">
+              <Field label="Gọi lại khi khách ở trạng thái">
+                {contactStatuses.length === 0 ? (
+                  <p className="text-xs text-(--color-danger)">
+                    Chưa lấy được danh mục trạng thái khách hàng. Kiểm tra token, hoặc tenant chưa
+                    cấu hình trạng thái nào trong phần Khách hàng.
+                  </p>
+                ) : (
+                  <div className="max-h-44 overflow-y-auto rounded-(--radius-field) border border-(--color-line) p-2">
+                    {contactStatuses.map(({ code, name, isSecondLevel }) => {
+                      const checked = (draft.retryConfig?.actionCodes ?? []).includes(code);
+                      return (
+                        <label key={code}
+                          className={`flex items-center gap-2 py-1 text-sm ${isSecondLevel ? 'pl-5' : 'font-medium'}`}>
+                          <input type="checkbox" checked={checked}
+                            onChange={() => setDraft({
+                              ...draft,
+                              retryConfig: {
+                                ...draft.retryConfig!,
+                                actionCodes: toggleValue(draft.retryConfig?.actionCodes, code),
+                              },
+                            })} />
+                          {name}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </Field>
+              <p className="mt-2 text-xs text-(--color-muted)">
+                Chọn trạng thái <b>cấp 1</b> là khớp mọi trạng thái con bên trong nó; chọn trạng thái
+                con thì chỉ khớp đúng nhánh đó.
+              </p>
+            </div>
+          )}
           {draft.retryConfig?.maxRetry === 0 && (
             <p className="mt-2 text-xs text-(--color-muted)">
               Số lần = 0 nghĩa là <b>tắt gọi lại</b> — backend hiểu đúng như vậy và sẽ không gọi lại lần nào.
@@ -238,6 +289,16 @@ function toggleCode(actionCodes: string[] | undefined, code: string): string[] {
   const current = actionCodes ?? [];
   const next = current.includes(code) ? current.filter((c) => c !== code) : [...current, code];
   return CALL_STATUS_CODES.map((c) => c.code).filter((c) => next.includes(c));
+}
+
+/**
+ * Bật/tắt một giá trị, giữ nguyên thứ tự người dùng chọn.
+ * <p>Khác {@link toggleCode} ở chỗ không sắp lại theo danh mục cố định — danh mục trạng thái khách
+ * là động theo tenant nên không có thứ tự chuẩn để bám.
+ */
+function toggleValue(values: string[] | undefined, value: string): string[] {
+  const current = values ?? [];
+  return current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
 }
 
 /** Bật/tắt 1 ngày. daysOfWeek chưa có (slot cũ) = đang chọn cả 7 → bắt đầu từ đủ 7 rồi bỏ ngày này. */

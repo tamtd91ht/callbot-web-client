@@ -24,13 +24,14 @@ import {
   CatalogError, fetchCallPurposes, fetchClassify, fetchPhonePrefixes, fetchScripts,
   fetchSipNumbers, fetchVoices,
   type CallPurposeOption, type ClassifyOption, type ScriptOption, type VoiceOption,
+  fetchContactStatuses, type ContactStatusOption,
 } from './catalogApi';
 import { IS_REAL } from './sessionApi';
 import { getToken, TOKEN_CHANGED_EVENT } from './token';
 
 export type CatalogKey =
   | 'scripts' | 'sipNumbers' | 'voices' | 'callPurposes'
-  | 'tags' | 'categories' | 'businesses' | 'phonePrefixes';
+  | 'tags' | 'categories' | 'businesses' | 'phonePrefixes' | 'contactStatuses';
 
 export interface CatalogState {
   scripts: ScriptOption[];
@@ -41,6 +42,7 @@ export interface CatalogState {
   categories: ClassifyOption[];
   businesses: ClassifyOption[];
   phonePrefixes: string[];
+  contactStatuses: ContactStatusOption[];
   loading: boolean;
   /** Lỗi theo từng danh mục — các API độc lập nên 1 cái chết không được che những cái kia. */
   errors: Partial<Record<CatalogKey, string>>;
@@ -49,6 +51,7 @@ export interface CatalogState {
 
 /** Nhãn tiếng Việt để ghép câu lỗi. */
 const CATALOG_LABELS: Record<CatalogKey, string> = {
+  contactStatuses: 'Trạng thái khách hàng',
   scripts: 'Kịch bản',
   sipNumbers: 'Đầu số',
   voices: 'Giọng đọc',
@@ -63,7 +66,7 @@ type CatalogData = Omit<CatalogState, 'loading' | 'errors' | 'reload'>;
 
 const EMPTY: CatalogData = {
   scripts: [], sipNumbers: [], voices: [], callPurposes: [],
-  tags: [], categories: [], businesses: [], phonePrefixes: [],
+  tags: [], categories: [], businesses: [], phonePrefixes: [], contactStatuses: [],
 };
 
 function messageOf(e: unknown): string {
@@ -84,11 +87,12 @@ export function useCatalogs(): CatalogState {
 
     void (async () => {
       // allSettled: danh mục nào lỗi thì chỉ danh mục đó báo lỗi, phần còn lại vẫn dùng được
-      const [scripts, sipNumbers, voices, callPurposes, tags, categories, businesses, phonePrefixes] =
+      const [scripts, sipNumbers, voices, callPurposes, tags, categories, businesses, phonePrefixes,
+        contactStatuses] =
         await Promise.allSettled([
           fetchScripts(), fetchSipNumbers(), fetchVoices(), fetchCallPurposes(),
           fetchClassify('tag'), fetchClassify('category'), fetchClassify('business'),
-          fetchPhonePrefixes(),
+          fetchPhonePrefixes(), fetchContactStatuses(),
         ]);
       if (!alive) return;
 
@@ -116,6 +120,7 @@ export function useCatalogs(): CatalogState {
         categories: take('categories', categories),
         businesses: take('businesses', businesses),
         phonePrefixes: take('phonePrefixes', phonePrefixes),
+        contactStatuses: take('contactStatuses', contactStatuses),
       });
       setErrors(nextErrors);
       setLoading(false);

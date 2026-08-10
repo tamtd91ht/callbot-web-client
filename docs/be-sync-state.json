@@ -1,8 +1,8 @@
 {
   "_comment": "Mốc đồng bộ với BE callbot-service — cập nhật bởi /sync-be. workingTreeSha256 = SHA256 của `git diff` (BE có nhiều việc chưa commit nên phải so cả working tree; e3b0c442... = working tree sạch).",
   "beRepo": "cloud-vihat-saas-omicrm-callbot-service",
-  "beHead": "bda23407bdb7eada9835e26583d2a5f47702b066",
+  "beHead": "7be8cda8ef947d30204334548164cf5227a5b61e",
   "workingTreeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "syncedAtLocal": "2026-08-10T10:30:00",
-  "lastPorted": "retry v3: RetryTrigger đổi thành CALL_STATUS/CONTACT_ATTRIBUTE/CONTACT_STATUS (revert cụm BOT_ACTION 87363fa); NO_ANSWER tụt xuống actionCodes (list string mở); actionCodes bắt buộc với mọi trigger khi maxRetry>0; UI cho chọn trigger + actionCodes (chỉ CALL_STATUS+NO_ANSWER bật, CONTACT_* disabled). BE nối gọi lại cho CẢ luồng automation lẫn web qua consumer group thứ 2 trên fs_event_complete_data, sau cờ callbot.client-session.retry.call-result.enabled=false."
+  "syncedAtLocal": "2026-08-10T13:10:00",
+  "lastPorted": "retry v3 + CONTACT_STATUS: BE so actionCodes voi filterContacts cua khach (contact ES, theo contactId hoac fallback phoneNumber). Ma la diem noi index/secondIndex: \"1\" khop ca cum cap 1, \"1-1\" khop dung nhanh con. FE lay danh muc tu tenant-config POST /filter-contact/list va mo lua chon CONTACT_STATUS; CONTACT_ATTRIBUTE van khoa (chua co danh muc thuoc tinh rieng). Mock KHONG mo phong CONTACT_STATUS - phai chay real mode de kiem chung."
 }

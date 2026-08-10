@@ -44,8 +44,12 @@ function tick(state: MockSessionState): void {
         const retry = session.retryConfig;
         const retried = Number(row.variables?.__retryCount || 0);
         // CHỈ mã NO_ANSWER của trigger CALL_STATUS — đúng hiện trạng BE: mã khác (ANSWER,
-        // VOICE_MAIL…) và trigger CONTACT_* được nhận nhưng CHƯA thực thi, không gọi lại lần nào.
+        // VOICE_MAIL…) nhận nhưng CHƯA thực thi vì engine cũ chỉ gọi lại ở nhánh không-nghe-máy.
         // Đừng "sửa" mock cho tử tế hơn BE — mock tốt hơn thật là cách chắc nhất để lộ bug ở prod.
+        //
+        // CONTACT_STATUS: BE đã chạy được (so actionCodes với filterContacts của khách qua contact ES),
+        // nhưng mock KHÔNG mô phỏng — store mock không có trạng thái khách. Chọn trigger đó ở mock thì
+        // không thấy gọi lại; muốn kiểm chứng phải chạy real mode.
         if (retry && retry.trigger === 'CALL_STATUS'
           && (retry.actionCodes ?? []).some((c) => c.trim().toUpperCase() === 'NO_ANSWER')
           && retried < retry.maxRetry) {
