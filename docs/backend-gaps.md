@@ -223,6 +223,38 @@ nào** trong `BaseRequest`/`CallBotRequest` nhận 2 giá trị này. Nghĩa là
 Cần làm việc với team wrapper. Xác nhận thêm: wrapper **không tự retry** (1 message = 1 lần originate)
 và **không biết hangup cause** (do `lua hangup_hook.lua` trên FreeSWITCH, ngoài repo).
 
+### 12d. `/record/search` bắt buộc `fromDate`/`toDate`, và range chạy trên `sessionTimeMs`
+
+Lịch sử cuộc gọi phải mượn endpoint luồng cũ `POST /call-bot/record/search` (luồng client chưa có
+endpoint riêng). Ba ràng buộc của nó bắt FE phải chế thêm dữ liệu người dùng không hề nhập:
+
+1. **`fromDate`/`toDate` là BẮT BUỘC** — thiếu một trong hai là ném `"invalid time range"`
+   (`CallBotFilter.java:43-45`), không có mặc định "toàn bộ thời gian". Đây chính là lỗi UI báo khi
+   search record: màn hình không có ô chọn ngày nên FE trước đó không gửi gì cả.
+2. **So sánh là `fromDate >= toDate`** → hai mốc BẰNG NHAU cũng lỗi, nên không thể gửi đúng một
+   điểm thời gian; buộc phải nới cửa sổ ra hai bên.
+3. **`toDate` tương lai bị kẹp về `now` TRƯỚC khi so sánh** (`CallBotFilter.java:40-42`) → phiên hẹn
+   giờ tương lai mà gửi cả cặp mốc tương lai sẽ bị lật thành `from >= to` và dính lại đúng lỗi trên.
+
+Bẫy lớn nhất: cặp mốc này **không phải "khoảng thời gian các cuộc gọi"**. ES lọc range trên
+`sessionTimeMs` — thời điểm của PHIÊN, mọi record trong phiên mang cùng một giá trị
+(`CallBotFilter.java:51`). Nên cửa sổ phải neo vào mốc phiên; nếu dùng kiểu "N ngày gần đây" thì
+phiên cũ trả **0 dòng, không lỗi, không log** — trông y hệt "phiên chưa gọi ai".
+Nới rộng cũng vô ích: chỉ làm ES fan-out qua nhiều index tháng (`esIndices()`, `FrequencyEnum.MONTHLY`).
+
+Mã lỗi trả về là chuỗi trần `"invalid time range"`, **không có prefix `CS_`**, nên FE không map được
+sang thông báo tiếng Việt — người dùng thấy nguyên văn tiếng Anh (rơi vào `CS_UPSTREAM_ERROR`).
+
+**Đề xuất BE**: luồng client cần endpoint search record riêng, lấy khoảng thời gian từ chính phiên
+(đã có `sessionId`) thay vì bắt client tự suy ra. Hiện FE workaround bằng `recordSearchWindow()`
+trong `src/lib/sessionApi.ts`.
+
+### 12e. Tên field trạng thái record là `status`, không phải `statuses`
+
+`CallBotRecordFilter.java:34` khai `status`. FE trước đó gửi `statuses` → do
+`@JsonIgnoreProperties(ignoreUnknown = true)` nên BE **nuốt im lặng**, không báo lỗi: bấm tab trạng
+thái nào cũng ra cùng một danh sách. Không có cách nào phát hiện từ response — chỉ đọc DTO mới thấy.
+
 ---
 
 ## Ghi chú thêm: mã lỗi là prefix trong `message`

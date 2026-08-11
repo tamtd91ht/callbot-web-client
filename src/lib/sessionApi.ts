@@ -94,6 +94,38 @@ function requireClientSession(id: string, feature: string): void {
   }
 }
 
+/**
+ * Cửa sổ [fromDate, toDate] cho /record/search của luồng cũ.
+ *
+ * Hai ràng buộc của BE (CallBotFilter.validate) khiến hàm này buộc phải tồn tại:
+ *  1. fromDate/toDate BẮT BUỘC — thiếu là ném thẳng "invalid time range", không có mặc định.
+ *  2. So sánh là `fromDate >= toDate` → BẰNG NHAU CŨNG LỖI, nên không thể gửi
+ *     from = to = mốc phiên. Phải nới ra hai bên.
+ *
+ * Điểm phản trực giác nhất: cặp mốc này KHÔNG phải "khoảng thời gian các cuộc gọi".
+ * ES lọc range trên `sessionTimeMs` — thời điểm của PHIÊN, và mọi record trong phiên đều
+ * mang cùng một giá trị đó. Vì vậy cửa sổ chỉ cần bao trọn đúng một điểm là mốc phiên;
+ * nới rộng ra không lấy thêm được dòng nào, mà chỉ làm ES fan-out qua nhiều index tháng
+ * (esIndices() chia index theo THÁNG). App production (web-v2 MACrudPreview) gửi đúng
+ * sessionTimeMs ± 1ms — ở đây để ±1 phút cho chắc vì FE chỉ suy ra mốc phiên gián tiếp.
+ *
+ * Hệ quả: cửa sổ phải neo vào mốc PHIÊN, tuyệt đối không phải "N ngày gần đây" — phiên cũ
+ * sẽ rơi ra ngoài và trả 0 dòng, im lặng, trông y hệt "phiên chưa gọi ai".
+ */
+function recordSearchWindow(session: ClientSession): { fromDate: number; toDate: number } {
+  // submittedTimeMs là lúc phiên thực sự vào engine — sát `sessionTimeMs` nhất.
+  // startTimeMs (giờ hẹn) chỉ dùng khi đã QUA: giờ hẹn tương lai không thể là mốc của
+  // record nào cả (phiên chưa chạy), mà còn kéo cửa sổ ra khỏi vùng hợp lệ sau khi BE kẹp.
+  const scheduled = session.startTimeMs && session.startTimeMs <= Date.now() ? session.startTimeMs : null;
+  const anchor = session.submittedTimeMs || scheduled || session.createdTimeMs || Date.now();
+  const PAD_MS = 60_000;
+  // BẪY: BE kẹp toDate về now TRƯỚC khi so sánh (CallBotFilter.validate). Phiên hẹn giờ
+  // tương lai mà gửi cả cặp mốc tương lai → toDate tụt về now → fromDate >= toDate → lại
+  // đúng lỗi "invalid time range". Nên tự kẹp trước, rồi ép fromDate luôn nhỏ hơn toDate.
+  const toDate = Math.min(anchor + PAD_MS, Date.now());
+  return { fromDate: Math.min(anchor - PAD_MS, toDate - PAD_MS), toDate };
+}
+
 /* ============================ Các nghiệp vụ ============================ */
 
 export const sessionApi = {
@@ -312,8 +344,20 @@ export const sessionApi = {
       : session.runtimeSessionId;
     if (!runtimeId) return { items: [], total: 0 };
 
-    const beFilter: Record<string, unknown> = { sessionIds: [runtimeId] };
-    if (filter.statuses?.length) beFilter.statuses = filter.statuses;
+    // BE (CallBotFilter.validate) BẮT BUỘC fromDate/toDate: thiếu một trong hai, hoặc
+    // fromDate >= toDate, là ném thẳng "invalid time range" — không phải cảnh báo, là chặn.
+    // Nên dù UI không có ô chọn ngày, FE vẫn phải tự suy ra cửa sổ thời gian.
+    //
+    // Cửa sổ phải bám theo PHIÊN, không phải "N ngày gần đây": ES lọc trên `sessionTimeMs`
+    // (thời điểm phiên), nên phiên tạo từ tháng trước sẽ rơi ra ngoài cửa sổ tương đối và
+    // trả về 0 dòng — im lặng, trông y hệt "phiên chưa gọi ai", rất khó lần.
+    const { fromDate, toDate } = recordSearchWindow(session);
+
+    const beFilter: Record<string, unknown> = { sessionIds: [runtimeId], fromDate, toDate };
+    // BE đặt tên field là `status` (CallBotRecordFilter), KHÔNG phải `statuses` như CallRecordFilter
+    // của FE. Gửi sai tên thì @JsonIgnoreProperties(ignoreUnknown = true) nuốt im lặng →
+    // bấm tab trạng thái nào cũng ra cùng một danh sách.
+    if (filter.statuses?.length) beFilter.status = filter.statuses;
     if (filter.sipNumbers?.length) beFilter.sipNumbers = filter.sipNumbers;
     if (filter.keyword?.trim()) beFilter.keyword = filter.keyword.trim();
 
