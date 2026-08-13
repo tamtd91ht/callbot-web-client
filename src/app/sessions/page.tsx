@@ -56,15 +56,26 @@ export default function SessionsPage() {
     return () => clearInterval(timer);
   }, [reload]);
 
+  /**
+   * Tách phiên LUỒNG CŨ ra khỏi danh sách này — chúng đã có trang riêng /sessions/legacy với
+   * bộ lọc đúng ngữ nghĩa (4 trạng thái gốc, lọc phía server). Để lẫn ở đây thì bộ lọc trạng
+   * thái bên dưới áp nhãn luồng mới lên chúng, vừa trùng lặp vừa dễ đọc sai.
+   * Nhận biết bằng id ghép `sessionId~sessionTimeMs` (xem `isLegacyId`).
+   */
+  const { freshSessions, legacyCount } = useMemo(() => {
+    const fresh = sessions.filter((s) => !s.id.includes('~'));
+    return { freshSessions: fresh, legacyCount: sessions.length - fresh.length };
+  }, [sessions]);
+
   const counts = useMemo(() => {
     const map = new Map<string, number>();
-    sessions.forEach((s) => map.set(s.status, (map.get(s.status) ?? 0) + 1));
+    freshSessions.forEach((s) => map.set(s.status, (map.get(s.status) ?? 0) + 1));
     return map;
-  }, [sessions]);
+  }, [freshSessions]);
 
   const visible = useMemo(() => {
     const needle = keyword.trim().toLowerCase();
-    const filtered = sessions.filter((s) => {
+    const filtered = freshSessions.filter((s) => {
       if (status !== 'ALL' && s.status !== status) return false;
       if (needle && !s.name.toLowerCase().includes(needle)) return false;
       return true;
@@ -83,9 +94,18 @@ export default function SessionsPage() {
           <h1 className="text-xl font-bold">Phiên gọi callbot</h1>
           <div className="mt-1 h-1 w-8 rounded bg-(--color-primary)" />
         </div>
-        <Link href="/sessions/new">
-          <Button variant="primary" className="px-6">+ Tạo phiên</Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          {/* Phiên luồng cũ có trang riêng — ngữ nghĩa trạng thái khác, lọc chạy phía server. */}
+          <Link href="/sessions/legacy">
+            <Button>
+              Phiên luồng cũ
+              {legacyCount > 0 && <span className="ml-1.5 opacity-70">{legacyCount}</span>}
+            </Button>
+          </Link>
+          <Link href="/sessions/new">
+            <Button variant="primary" className="px-6">+ Tạo phiên</Button>
+          </Link>
+        </div>
       </div>
 
       {error && (
@@ -97,7 +117,7 @@ export default function SessionsPage() {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">
           {STATUS_FILTERS.map((filter) => {
-            const count = filter.key === 'ALL' ? sessions.length : counts.get(filter.key) ?? 0;
+            const count = filter.key === 'ALL' ? freshSessions.length : counts.get(filter.key) ?? 0;
             return (
               <button key={filter.key} type="button" onClick={() => setStatus(filter.key)}
                 className={`rounded-full px-3.5 py-1 text-[13px] font-medium transition ${
@@ -181,7 +201,7 @@ export default function SessionsPage() {
             {visible.length === 0 && loaded && (
               <tr>
                 <td colSpan={8} className="px-3 py-8 text-center text-(--color-muted)">
-                  {sessions.length === 0
+                  {freshSessions.length === 0
                     ? <>Chưa có phiên nào — bấm <b>+ Tạo phiên</b> để bắt đầu.</>
                     : 'Không có phiên nào khớp bộ lọc.'}
                 </td>

@@ -32,9 +32,12 @@ import { ReportPanel } from '@/components/session/ReportPanel';
 import { SessionConfigPanel } from '@/components/session/SessionConfigPanel';
 import { SessionActionDialog } from '@/components/session/SessionActionDialog';
 import { CallHistoryTable } from '@/components/session/CallHistoryTable';
+import { CustomerReportTable } from '@/components/session/CustomerReportTable';
 import { CloneSessionDialog } from '@/components/session/CloneSessionDialog';
 import { ScriptDetailDrawer } from '@/components/session/ScriptDetailDrawer';
 import { scriptLabel } from '@/components/session/CatalogFields';
+
+type SessionTab = 'history' | 'data' | 'customers';
 
 export default function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -50,7 +53,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
-  const [tab, setTab] = useState<'history' | 'data'>('history');
+  const [tab, setTab] = useState<SessionTab>('history');
   const catalogs = useCatalogs();
 
   const reload = useCallback(async () => {
@@ -223,15 +226,23 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
         <JobsPanel sessionId={id} isDraft={session.status === 'DRAFT'} onFinished={() => void reload()} />
       </Card>
 
-      {/* Tách 2 bảng: lịch sử CUỘC GỌI vs DATA đã nạp — hai khái niệm khác nhau, hay bị lẫn */}
+      {/*
+        Tách 3 bảng — ba khái niệm khác nhau và người vận hành RẤT hay lẫn:
+          lịch sử CUỘC GỌI (1 khách retry 3 lần = 3 dòng)
+          · DATA đã nạp (staging, có dòng trùng/lỗi)
+          · KHÁCH HÀNG (1 khách = 1 dòng dù gọi lại mấy lần)
+      */}
       <div className="overflow-hidden rounded-(--radius-card) border border-(--color-line) bg-white">
-        <Tabs active={tab} onChange={(key) => setTab(key as 'history' | 'data')}
+        <Tabs active={tab} onChange={(key) => setTab(key as SessionTab)}
           tabs={[
             { key: 'history', label: 'Lịch sử cuộc gọi' },
             { key: 'data', label: `Data đã nạp (${activeRows.length.toLocaleString('vi-VN')})` },
+            { key: 'customers', label: 'Báo cáo khách hàng' },
           ]} />
         <div className="p-5">
-          {tab === 'history' ? (
+          {tab === 'customers' ? (
+            <CustomerReportTable session={session} refreshKey={dataVersion} />
+          ) : tab === 'history' ? (
             <CallHistoryTable session={session} refreshKey={dataVersion} />
           ) : (
             <SessionDataTable

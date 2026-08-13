@@ -11,8 +11,10 @@
  */
 import type {
   AppendMode, CallbotScript, CallRecord, CallRecordFilter, ClientSession, CloneSessionRequest,
-  CloneSessionResult, ContactSuggestion, CreateSessionRequest, CrmContactFilter, DataRow,
-  ImportBatch, ImportExcelResult, Paginated, SessionReport, UpdateSessionRequest,
+  CloneSessionResult, ContactSuggestion, CreateSessionRequest, CrmContactFilter,
+  CustomerReportDetail, CustomerReportPage, CustomerReportQuery, CustomerReportSummary, DataRow,
+  ImportBatch, ImportExcelResult, LegacySessionFilter, LegacySessionReport,
+  Paginated, SessionReport, UpdateSessionRequest,
 } from '@/contracts/types';
 import {
   isLegacyId, mapCallRecord, mapClientRow, mapClientSession, mapContactSuggestion, mapImportBatch,
@@ -86,6 +88,18 @@ async function beUpload<T>(path: string, form: FormData): Promise<T> {
 }
 
 const cs = <T>(path: string, body: unknown) => beCall<T>(`/client-session${path}`, body);
+
+/**
+ * Báo cáo khách hàng đọc THẲNG index gom trên backend thật — BFF simulator không dựng lại
+ * index đó, nên mock mode không có gì để trả. Báo rõ ngay thay vì để UI gọi vào một route
+ * BFF không tồn tại rồi hiện lỗi 404 khó hiểu.
+ */
+function requireRealMode(feature: string): void {
+  if (!IS_REAL) {
+    throw new ApiError('CS_INVALID_STATE',
+      `${feature}: chỉ chạy ở chế độ real (đặt NEXT_PUBLIC_CALLBOT_MODE=real), mock không có index gom`);
+  }
+}
 
 /** Phiên luồng cũ chỉ xem — chặn ngay ở FE cho thông báo rõ, không phí 1 vòng request. */
 function requireClientSession(id: string, feature: string): void {
@@ -295,6 +309,104 @@ export const sessionApi = {
     if (!IS_REAL) return get<SessionReport>(`/api/client-session/${id}/report`);
     requireClientSession(id, 'Báo cáo phiên');
     return cs<SessionReport>('/report/session', { id });
+  },
+
+  /**
+   * Báo cáo khách hàng (A-05) — MỘT KH = MỘT DÒNG, khác `report()` vốn đếm theo CUỘC.
+   *
+   * KHÔNG gọi requireClientSession: đây là API ĐỌC từ index gom, khoá gom là
+   * tenantId+sessionId+phoneNumber nên phiên LUỒNG CŨ cũng có dòng. Chặn ở đây là tự bịt
+   * mất đúng nhóm phiên mà báo cáo này sinh ra để phục vụ.
+   */
+  async customerReport(query: CustomerReportQuery): Promise<CustomerReportPage> {
+    requireRealMode('Báo cáo khách hàng');
+    const raw = await cs<Partial<CustomerReportPage>>('/report/customer/list', query);
+    // BE bỏ field null (@JsonInclude NON_NULL) → data/nextCursor có thể VẮNG MẶT chứ không phải null.
+    return {
+      data: raw?.data ?? [],
+      total: raw?.total ?? 0,
+      nextCursor: raw?.nextCursor ?? null,
+      size: raw?.size ?? (query.size ?? 20),
+    };
+  },
+
+  /**
+   * Danh sách phiên LUỒNG CŨ (CallBotHandler) — `POST /session/search`.
+   * Khác `list()`: gọi RIÊNG luồng cũ, và BE **thật sự đọc filter** nên lọc chạy phía server.
+   * Trả kèm `total` để phân trang server-side (luồng mới không có).
+   */
+  async legacyList(filter: LegacySessionFilter): Promise<Paginated<ClientSession>> {
+    requireRealMode('Danh sách phiên luồng cũ');
+    const { page = 1, size = 20, ...rest } = filter;
+    const raw = await beCall<OldPaginated<OldSessionDTO>>('/session/search',
+      { filter: rest, page, size });
+    return {
+      items: (raw?.items ?? []).map(mapOldSession),
+      total: raw?.total_items ?? raw?.totalItems ?? 0,
+    };
+  },
+
+  /**
+   * Tổng hợp báo cáo phiên luồng cũ — `POST /session/report`.
+   * Mẫu số là CUỘC GỌI. Body là filter TRẦN (không bọc trong `{filter}` như `/session/search`)
+   * vì controller đọc thẳng `ctx.body()` thành `CallBotSessionFilter`.
+   */
+  async legacyReport(filter: Omit<LegacySessionFilter, 'page' | 'size'>): Promise<LegacySessionReport> {
+    requireRealMode('Báo cáo phiên luồng cũ');
+    const raw = await beCall<Partial<LegacySessionReport>>('/session/report', filter);
+    // Không có phiên nào khớp thì BE trả object builder RỖNG (mọi field @Builder.Default = 0),
+    // nhưng @JsonInclude(NON_NULL) vẫn có thể lược bớt → chuẩn hoá về 0.
+    return {
+      totalSession: raw?.totalSession ?? 0,
+      totalRecord: raw?.totalRecord ?? 0,
+      totalAnswered: raw?.totalAnswered ?? 0,
+      totalNoAnswer: raw?.totalNoAnswer ?? 0,
+      totalFailed: raw?.totalFailed ?? 0,
+      totalCanceled: raw?.totalCanceled ?? 0,
+      totalProcessing: raw?.totalProcessing ?? 0,
+    };
+  },
+
+  /**
+   * Ô tổng hợp của báo cáo KH. Gửi ĐÚNG bộ lọc đang dùng cho danh sách thì số trên ô mới khớp
+   * bảng bên dưới — BE dùng chung hàm dựng query cho cả hai endpoint.
+   * `cursor`/`size`/`sort*` không có ý nghĩa ở đây nên bỏ đi cho khỏi hiểu nhầm.
+   */
+  async customerReportSummary(
+    query: Omit<CustomerReportQuery, 'cursor' | 'size' | 'sortField' | 'sortAsc'>,
+  ): Promise<CustomerReportSummary> {
+    requireRealMode('Tổng hợp báo cáo khách hàng');
+    const raw = await cs<Partial<CustomerReportSummary>>('/report/customer/summary', query);
+    // Index rỗng thì BE trả map RỖNG (return sớm), không phải map đủ key với số 0.
+    return {
+      totalCustomers: raw?.totalCustomers ?? 0,
+      totalRecord: raw?.totalRecord ?? 0,
+      totalCall: raw?.totalCall ?? 0,
+      totalAnswered: raw?.totalAnswered ?? 0,
+      totalNoAnswer: raw?.totalNoAnswer ?? 0,
+      totalFailed: raw?.totalFailed ?? 0,
+      totalBillSec: raw?.totalBillSec ?? 0,
+      avgBillSec: raw?.avgBillSec ?? null,
+      totalAnswerSec: raw?.totalAnswerSec ?? 0,
+      avgAnswerSec: raw?.avgAnswerSec ?? null,
+      avgRingingTimeMs: raw?.avgRingingTimeMs ?? null,
+      avgTalkTimeMs: raw?.avgTalkTimeMs ?? null,
+      byBestStatus: raw?.byBestStatus ?? {},
+      answeredCustomers: raw?.answeredCustomers ?? 0,
+      answerRateByCustomer: raw?.answerRateByCustomer ?? 0,
+    };
+  },
+
+  /**
+   * Chi tiết 1 KH — bung `attempts[]`. Cả 3 tham số đều BẮT BUỘC ở BE;
+   * `sessionTimeMs` là mốc neo index theo năm, thiếu là CS_INVALID_CONFIG.
+   */
+  async customerReportDetail(
+    sessionId: string, sessionTimeMs: number, phoneNumber: string,
+  ): Promise<CustomerReportDetail | null> {
+    requireRealMode('Chi tiết khách hàng');
+    return cs<CustomerReportDetail | null>('/report/customer/detail',
+      { sessionId, sessionTimeMs, phoneNumber });
   },
 
   async searchContacts(query: string): Promise<ContactSuggestion[]> {

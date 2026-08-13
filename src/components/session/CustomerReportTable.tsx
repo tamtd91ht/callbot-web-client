@@ -1,0 +1,462 @@
+'use client';
+/**
+ * Báo cáo khách hàng của một phiên (A-05) — đọc index gom, MỘT KH = MỘT DÒNG.
+ *
+ * PHÂN BIỆT VỚI HAI BẢNG KIA (người vận hành rất hay lẫn, nên ghi rõ trên UI luôn):
+ *   - SessionDataTable  = DATA STAGING: khách đã nạp vào phiên, có trạng thái trùng/lỗi.
+ *   - CallHistoryTable  = CUỘC GỌI: khách bị gọi lại 3 lần → 3 dòng.
+ *   - bảng này          = KHÁCH HÀNG: gọi lại bao nhiêu lần vẫn 1 dòng, cột "Kết quả" lấy
+ *                         kết quả TỐT NHẤT của mọi lần gọi.
+ *
+ * ⚠️ VÌ VẬY TỈ LỆ NGHE MÁY Ở ĐÂY KHÁC Ô "Tỉ lệ nghe máy" CỦA BÁO CÁO PHIÊN, CẢ HAI ĐỀU ĐÚNG:
+ * ở đây mẫu số là KHÁCH, bên kia là CUỘC. Khách gọi 3 lần, lần cuối mới nghe máy → ở đây
+ * 1/1 = 100%, báo cáo phiên 1/3 = 33%. Không ghi nhãn thì chắc chắn bị báo "lỗi số liệu".
+ *
+ * PHÂN TRANG LÀ CURSOR (search_after), KHÔNG phải số trang: BE không trả tổng số trang và
+ * ES chặn from/size sâu ở 10.000 doc. Nên chỉ đi tiến/lùi tuần tự — muốn lùi phải tự nhớ
+ * cursor các trang đã qua (stack bên dưới), không tính ngược được.
+ */
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type {
+  ClientSession, CustomerReportRow, CustomerReportSortField, CustomerReportSummary,
+} from '@/contracts/types';
+import { ApiError } from '@/lib/apiClient';
+import { sessionApi } from '@/lib/sessionApi';
+import { parseCompositeId } from '@/contracts/mappers';
+import { Button } from '../ui';
+import { CustomerReportDetailDrawer } from './CustomerReportDetailDrawer';
+
+const PAGE_SIZE = 20;
+
+/** Cửa sổ thời gian quanh mốc phiên — BE bắt buộc fromMs/toMs để chọn index theo NĂM. */
+const WINDOW_BEFORE_MS = 24 * 60 * 60 * 1000;        // 1 ngày trước mốc phiên
+const WINDOW_AFTER_MS = 400 * 24 * 60 * 60 * 1000;   // phiên dài ngày vẫn nằm trong cửa sổ
+
+const STATUS_FILTERS: Array<{ key: string; label: string }> = [
+  { key: 'ALL', label: 'Tất cả' },
+  { key: 'ANSWERED', label: 'Nghe máy' },
+  { key: 'NO_ANSWER', label: 'Không nghe' },
+  { key: 'FAILED', label: 'Lỗi' },
+  { key: 'CANCELED', label: 'Đã huỷ' },
+  { key: 'PROCESSING', label: 'Đang gọi' },
+];
+
+const STATUS_STYLE: Record<string, { label: string; className: string }> = {
+  ANSWERED: { label: 'Nghe máy', className: 'bg-(--color-primary-soft) text-(--color-primary-dark)' },
+  NO_ANSWER: { label: 'Không nghe', className: 'bg-amber-50 text-amber-800' },
+  FAILED: { label: 'Lỗi', className: 'bg-red-50 text-red-700' },
+  PROCESSING: { label: 'Đang gọi', className: 'bg-sky-50 text-sky-700' },
+  CANCELED: { label: 'Đã huỷ', className: 'bg-gray-100 text-gray-600' },
+};
+
+/** Cột sort được — đúng whitelist BE; ngoài danh sách này BE lặng lẽ rơi về lastCallTimeMs. */
+const SORT_COLUMNS: Array<{ field: CustomerReportSortField; label: string }> = [
+  { field: 'lastCallTimeMs', label: 'Gọi lần cuối' },
+  { field: 'firstCallTimeMs', label: 'Gọi lần đầu' },
+  { field: 'totalCall', label: 'Số cuộc' },
+  { field: 'totalAnswered', label: 'Nghe máy' },
+  { field: 'totalBillSec', label: 'Thời lượng gọi' },
+  { field: 'totalAnswerSec', label: 'Thời lượng kết nối' },
+];
+
+type ContactFilter = 'ALL' | 'HAS' | 'NONE';
+
+export function CustomerReportTable({
+  session, refreshKey,
+}: { session: ClientSession; refreshKey?: number }) {
+  const [rows, setRows] = useState<CustomerReportRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string[] | null>(null);
+  /** Cursor của các trang ĐÃ qua — phần tử cuối là cursor mở trang hiện tại. */
+  const [cursorStack, setCursorStack] = useState<Array<string[] | null>>([null]);
+  const [status, setStatus] = useState('ALL');
+  const [contactFilter, setContactFilter] = useState<ContactFilter>('ALL');
+  const [minCalls, setMinCalls] = useState(0);
+  const [keyword, setKeyword] = useState('');
+  const [appliedKeyword, setAppliedKeyword] = useState('');
+  const [sortField, setSortField] = useState<CustomerReportSortField>('lastCallTimeMs');
+  const [sortAsc, setSortAsc] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<CustomerReportRow | null>(null);
+  const [summary, setSummary] = useState<CustomerReportSummary | null>(null);
+  /** true = endpoint tổng hợp trả 404 → service chưa deploy bản mới, không phải hết dữ liệu. */
+  const [summaryMissing, setSummaryMissing] = useState(false);
+
+  // Phiên luồng cũ mang id ghép "sessionId~sessionTimeMs" — tách ra lấy đúng 2 tham số BE cần.
+  const { sessionId, sessionTimeMs } = useMemo(() => parseCompositeId(session.id), [session.id]);
+
+  /**
+   * Mốc neo cửa sổ thời gian: ưu tiên sessionTimeMs của id ghép (luồng cũ), sau đó tới
+   * startTimeMs/createdTimeMs (luồng mới). KHÔNG lấy Date.now() làm mốc — phiên chạy từ năm
+   * trước sẽ rơi ra ngoài index năm nay và trả rỗng mà không có lỗi nào.
+   */
+  const anchorMs = sessionTimeMs || session.startTimeMs || session.createdTimeMs || 0;
+
+  const load = useCallback(async (cursor: string[] | null) => {
+    // Không có mốc thì cửa sổ rơi về 1970 → BE quét index năm 1970 → TRẢ RỖNG, KHÔNG LỖI,
+    // KHÔNG LOG, nhìn y hệt "phiên chưa gọi ai". Thà báo thẳng còn hơn để đọc nhầm số liệu.
+    if (!anchorMs) {
+      setRows([]); setTotal(0); setNextCursor(null);
+      setError('Phiên không có mốc thời gian nên không xác định được khoảng tra báo cáo.');
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await sessionApi.customerReport({
+        fromMs: anchorMs - WINDOW_BEFORE_MS,
+        toMs: anchorMs + WINDOW_AFTER_MS,
+        sessionIds: [sessionId],
+        bestStatuses: status === 'ALL' ? undefined : [status],
+        hasContact: contactFilter === 'ALL' ? undefined : contactFilter === 'HAS',
+        keyword: appliedKeyword || undefined,
+        minCalls: minCalls > 0 ? minCalls : undefined,
+        size: PAGE_SIZE,
+        cursor: cursor ?? undefined,
+        sortField,
+        sortAsc,
+      });
+      setRows(result.data);
+      setTotal(result.total);
+      setNextCursor(result.nextCursor);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+      setRows([]);
+      setTotal(0);
+      setNextCursor(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [anchorMs, sessionId, status, contactFilter, appliedKeyword, minCalls, sortField, sortAsc]);
+
+  /**
+   * Ô tổng hợp — CÙNG bộ lọc với danh sách (BE dùng chung hàm dựng query) nên số luôn khớp.
+   * KHÔNG phụ thuộc cursor/sort: đổi trang hay đổi cột sắp xếp thì tổng hợp không đổi,
+   * gọi lại chỉ tốn thêm một vòng request.
+   */
+  const loadSummary = useCallback(async () => {
+    if (!anchorMs) { setSummary(null); return; }
+    try {
+      setSummary(await sessionApi.customerReportSummary({
+        fromMs: anchorMs - WINDOW_BEFORE_MS,
+        toMs: anchorMs + WINDOW_AFTER_MS,
+        sessionIds: [sessionId],
+        bestStatuses: status === 'ALL' ? undefined : [status],
+        hasContact: contactFilter === 'ALL' ? undefined : contactFilter === 'HAS',
+        keyword: appliedKeyword || undefined,
+        minCalls: minCalls > 0 ? minCalls : undefined,
+      }));
+      setSummaryMissing(false);
+    } catch (e) {
+      // Lỗi tổng hợp KHÔNG che bảng: danh sách vẫn dùng được, chỉ ẩn dải ô.
+      setSummary(null);
+      // 404 = service chưa deploy bản có /report/customer/summary (route ĐÃ có trong code BE).
+      // Phân biệt với "không có dữ liệu", nếu không sẽ mất thời gian nghi ngờ nhầm chỗ.
+      setSummaryMissing(e instanceof ApiError && e.errorCode === 'CS_BAD_GATEWAY');
+    }
+  }, [anchorMs, sessionId, status, contactFilter, appliedKeyword, minCalls]);
+
+  // Đổi bộ lọc/sort thì cursor cũ VÔ NGHĨA (search_after bám theo giá trị sort) → reset về trang đầu.
+  useEffect(() => {
+    setCursorStack([null]);
+    void load(null);
+  }, [load, refreshKey]);
+
+  useEffect(() => { void loadSummary(); }, [loadSummary, refreshKey]);
+
+  const goNext = () => {
+    if (!nextCursor) return;
+    setCursorStack((s) => [...s, nextCursor]);
+    void load(nextCursor);
+  };
+
+  const goPrev = () => {
+    if (cursorStack.length <= 1) return;
+    const stack = cursorStack.slice(0, -1);
+    setCursorStack(stack);
+    void load(stack[stack.length - 1]);
+  };
+
+  const toggleSort = (field: CustomerReportSortField) => {
+    if (field === sortField) setSortAsc((v) => !v);
+    else { setSortField(field); setSortAsc(false); }
+  };
+
+  const pageIndex = cursorStack.length;
+  const notSubmitted = !session.runtimeSessionId && session.status === 'DRAFT';
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-[15px] font-bold">Báo cáo khách hàng</h3>
+          <p className="mt-0.5 text-xs text-(--color-muted)">
+            Mỗi khách hàng một dòng — gọi lại bao nhiêu lần vẫn gộp chung.
+            Cột <b>Kết quả</b> lấy kết quả tốt nhất của mọi lần gọi, nên tỉ lệ nghe máy ở đây
+            tính trên số <b>khách</b>, khác ô “Tỉ lệ nghe máy” của báo cáo phiên (tính trên số <b>cuộc</b>).
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input value={keyword} onChange={(e) => setKeyword(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') setAppliedKeyword(keyword.trim()); }}
+            placeholder="Tìm số điện thoại hoặc tên…"
+            className="w-56 rounded-(--radius-field) border border-(--color-line) px-3 py-1.5 text-sm outline-none focus:border-(--color-primary)" />
+          <Button onClick={() => setAppliedKeyword(keyword.trim())}>Tìm</Button>
+          <Button onClick={() => { void load(cursorStack[cursorStack.length - 1]); void loadSummary(); }}>
+            Làm mới
+          </Button>
+        </div>
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        {STATUS_FILTERS.map((f) => (
+          <button key={f.key} type="button" onClick={() => setStatus(f.key)}
+            className={`rounded-full px-3.5 py-1 text-[13px] font-medium transition ${
+              status === f.key
+                ? 'bg-(--color-navy) text-white'
+                : 'bg-(--color-field) text-(--color-ink) hover:bg-gray-200'}`}>
+            {f.label}
+          </button>
+        ))}
+
+        <span className="mx-1 h-4 w-px bg-(--color-line)" />
+
+        {([
+          { key: 'ALL', label: 'Mọi khách' },
+          { key: 'HAS', label: 'Có trong danh bạ' },
+          { key: 'NONE', label: 'Số lạ' },
+        ] as Array<{ key: ContactFilter; label: string }>).map((f) => (
+          <button key={f.key} type="button" onClick={() => setContactFilter(f.key)}
+            className={`rounded-full px-3.5 py-1 text-[13px] font-medium transition ${
+              contactFilter === f.key
+                ? 'bg-(--color-navy) text-white'
+                : 'bg-(--color-field) text-(--color-ink) hover:bg-gray-200'}`}>
+            {f.label}
+          </button>
+        ))}
+
+        <span className="mx-1 h-4 w-px bg-(--color-line)" />
+
+        <label className="flex items-center gap-1.5 text-[13px] text-(--color-muted)">
+          Bị gọi từ
+          <input type="number" min={0} value={minCalls || ''} placeholder="0"
+            onChange={(e) => setMinCalls(Math.max(0, Number(e.target.value) || 0))}
+            className="w-16 rounded-(--radius-field) border border-(--color-line) px-2 py-1 text-sm text-(--color-ink) outline-none focus:border-(--color-primary)" />
+          cuộc trở lên
+        </label>
+      </div>
+
+      {error && <div className="mb-3 rounded-lg bg-red-50 px-4 py-2.5 text-sm text-red-800">{error}</div>}
+
+      {summaryMissing && (
+        <div className="mb-3 rounded-lg bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
+          Chưa hiện được ô tổng hợp: service stg chưa deploy bản có <code>/report/customer/summary</code>.
+          Danh sách bên dưới vẫn là dữ liệu thật.
+        </div>
+      )}
+
+      {/* Dải ô tổng hợp — CÙNG bộ lọc với bảng nên số luôn khớp. Đổi trang không làm số đổi. */}
+      {summary && summary.totalCustomers > 0 && (
+        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+          <SummaryTile label="Khách hàng" value={summary.totalCustomers.toLocaleString('vi-VN')} />
+          <SummaryTile label="Tỉ lệ nghe máy"
+            value={`${summary.answerRateByCustomer.toFixed(2)}%`}
+            hint={`${summary.answeredCustomers.toLocaleString('vi-VN')} khách · tính trên KHÁCH`}
+            highlight />
+          <SummaryTile label="Tổng cuộc gọi" value={summary.totalCall.toLocaleString('vi-VN')}
+            hint={summary.totalCall > summary.totalCustomers
+              ? `${(summary.totalCall - summary.totalCustomers).toLocaleString('vi-VN')} lần gọi lại`
+              : undefined} />
+          <SummaryTile label="TB mỗi cuộc" value={formatDuration(summary.avgBillSec)}
+            hint="÷ số cuộc" />
+          <SummaryTile label="TB kết nối" value={formatDuration(summary.avgAnswerSec)}
+            hint="÷ cuộc nghe máy" />
+          <SummaryTile label="TB đổ chuông" value={formatMs(summary.avgRingingTimeMs)}
+            hint="÷ cuộc đo được" />
+        </div>
+      )}
+
+      {notSubmitted ? (
+        <p className="py-6 text-center text-sm text-(--color-muted)">
+          Phiên chưa submit nên chưa có khách hàng nào được gọi.
+        </p>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-280 text-sm">
+              <thead className="bg-(--color-field) text-left text-xs text-(--color-muted)">
+                <tr>
+                  <Th className="w-12">#</Th>
+                  <Th>Khách hàng</Th>
+                  <Th>Kết quả</Th>
+                  <Th>Lần gọi cuối</Th>
+                  {SORT_COLUMNS.filter((c) => c.field !== 'lastCallTimeMs' && c.field !== 'firstCallTimeMs')
+                    .map((c) => (
+                      <SortableTh key={c.field} active={sortField === c.field} asc={sortAsc}
+                        onClick={() => toggleSort(c.field)} className="text-right">
+                        {c.label}
+                      </SortableTh>
+                    ))}
+                  {/* avg* KHÔNG nằm trong whitelist sort của BE — bấm sort sẽ lặng lẽ rơi về
+                      lastCallTimeMs, nên để Th thường thay vì SortableTh gây hiểu nhầm. */}
+                  <Th className="text-right">Đổ chuông TB</Th>
+                  <Th className="text-right">Đàm thoại TB</Th>
+                  <SortableTh active={sortField === 'lastCallTimeMs'} asc={sortAsc}
+                    onClick={() => toggleSort('lastCallTimeMs')}>
+                    Gọi lần cuối
+                  </SortableTh>
+                  <Th className="w-20"> </Th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, index) => {
+                  const style = STATUS_STYLE[row.bestStatus ?? ''] ?? {
+                    label: row.bestStatus || '—', className: 'bg-gray-100 text-gray-600',
+                  };
+                  const lastStyle = STATUS_STYLE[row.lastStatus ?? ''];
+                  return (
+                    <tr key={`${row.phoneNumber}_${index}`} className="border-t border-(--color-line)">
+                      <Td className="text-(--color-muted)">{(pageIndex - 1) * PAGE_SIZE + index + 1}</Td>
+                      <Td>
+                        <span className="font-medium">{row.phoneNumber}</span>
+                        {row.contactName
+                          ? <span className="ml-2 text-xs text-(--color-muted)">{row.contactName}</span>
+                          : <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">
+                              số lạ
+                            </span>}
+                      </Td>
+                      <Td>
+                        <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${style.className}`}>
+                          {style.label}
+                        </span>
+                      </Td>
+                      <Td className="text-(--color-muted)">
+                        {lastStyle ? lastStyle.label : (row.lastStatus || '—')}
+                      </Td>
+                      <Td className="text-right">
+                        {(row.totalCall ?? 0).toLocaleString('vi-VN')}
+                        {(row.retriedCalls ?? 0) > 0 && (
+                          <span className="ml-1 text-xs font-semibold text-amber-700">
+                            +{row.retriedCalls} gọi lại
+                          </span>
+                        )}
+                      </Td>
+                      <Td className="text-right">{(row.totalAnswered ?? 0).toLocaleString('vi-VN')}</Td>
+                      <Td className="text-right">{formatDuration(row.totalBillSec)}</Td>
+                      <Td className="text-right">{formatDuration(row.totalAnswerSec)}</Td>
+                      <Td className="text-right">{formatMs(row.avgRingingTimeMs)}</Td>
+                      <Td className="text-right">{formatMs(row.avgTalkTimeMs)}</Td>
+                      <Td className="text-(--color-muted)">{formatTime(row.lastCallTimeMs)}</Td>
+                      <Td>
+                        <button type="button" onClick={() => setSelected(row)}
+                          className="text-(--color-link) hover:underline">
+                          Chi tiết
+                        </button>
+                      </Td>
+                    </tr>
+                  );
+                })}
+                {rows.length === 0 && !loading && (
+                  <tr><td colSpan={12} className="py-6 text-center text-sm text-(--color-muted)">
+                    Không có khách hàng nào khớp bộ lọc
+                  </td></tr>
+                )}
+                {loading && rows.length === 0 && (
+                  <tr><td colSpan={12} className="py-6 text-center text-sm text-(--color-muted)">Đang tải…</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between text-sm">
+            <span className="text-(--color-muted)">
+              {total.toLocaleString('vi-VN')} khách hàng
+              {loading && rows.length > 0 && ' · đang cập nhật…'}
+            </span>
+            {/* Cursor pagination: không có tổng số trang để hiển thị "trang x/y". */}
+            <div className="flex items-center gap-2">
+              <Button disabled={pageIndex <= 1 || loading} onClick={goPrev}>Trước</Button>
+              <span className="text-(--color-muted)">Trang {pageIndex}</span>
+              <Button disabled={!nextCursor || loading} onClick={goNext}>Sau</Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {selected && (
+        <CustomerReportDetailDrawer
+          sessionId={sessionId}
+          sessionTimeMs={sessionTimeMs || anchorMs}
+          row={selected}
+          onClose={() => setSelected(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function SummaryTile({ label, value, hint, highlight }: {
+  label: string; value: string; hint?: string; highlight?: boolean;
+}) {
+  return (
+    <div className={`rounded-xl border p-3 ${highlight
+      ? 'border-(--color-primary) bg-(--color-primary-soft)'
+      : 'border-(--color-line)'}`}>
+      <div className="text-xs text-(--color-muted)">{label}</div>
+      <div className={`mt-0.5 text-lg font-bold ${highlight ? 'text-(--color-primary-dark)' : ''}`}>
+        {value}
+      </div>
+      {hint && <div className="mt-0.5 text-[11px] text-(--color-muted)">{hint}</div>}
+    </div>
+  );
+}
+
+function Th({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <th className={`px-3 py-2 font-semibold ${className}`}>{children}</th>;
+}
+
+function SortableTh({ children, active, asc, onClick, className = '' }: {
+  children: React.ReactNode; active: boolean; asc: boolean; onClick: () => void; className?: string;
+}) {
+  return (
+    <th className={`px-3 py-2 font-semibold ${className}`}>
+      <button type="button" onClick={onClick}
+        className={`inline-flex items-center gap-1 hover:text-(--color-ink) ${active ? 'text-(--color-ink)' : ''}`}>
+        {children}
+        <span className={active ? '' : 'opacity-30'}>{active && asc ? '▲' : '▼'}</span>
+      </button>
+    </th>
+  );
+}
+
+function Td({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return <td className={`px-3 py-2 ${className}`}>{children}</td>;
+}
+
+/** null = CHƯA TRA ĐƯỢC CDR, khác hẳn 0 giây — nên hiện "—" chứ không hiện "0s". */
+function formatDuration(seconds?: number | null): string {
+  if (seconds == null) return '—';
+  if (seconds <= 0) return '0s';
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}p ${String(seconds % 60).padStart(2, '0')}s`;
+}
+
+/**
+ * Thời lượng tính bằng MILI GIÂY (đổ chuông / đàm thoại) — khác `formatDuration` vốn nhận GIÂY.
+ * Dưới 10s hiện 1 chữ số thập phân: đổ chuông thường vài giây, làm tròn về "3s" mất hết chi tiết.
+ */
+function formatMs(ms?: number | null): string {
+  if (ms == null) return '—';
+  if (ms <= 0) return '0s';
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  return formatDuration(Math.round(ms / 1000));
+}
+
+function formatTime(ms?: number | null): string {
+  if (!ms) return '—';
+  return new Date(ms).toLocaleString('vi-VN', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}

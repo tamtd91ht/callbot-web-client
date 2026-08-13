@@ -257,6 +257,84 @@ thái nào cũng ra cùng một danh sách. Không có cách nào phát hiện t
 
 ---
 
+## 13. ~~Báo cáo khách hàng: không lấy được tổng hợp toàn phiên~~ — ĐÃ XONG
+
+~~Ghi nhận 2026-08-13 khi dựng tab "Báo cáo khách hàng".~~
+
+**ĐÃ GIẢI QUYẾT cùng ngày** (commit `b94c212`): BE thêm `POST /report/customer/summary`, dùng CHUNG
+hàm dựng query với `/report/customer/list` nên số trên ô luôn khớp danh sách bên dưới. Trả
+`totalCustomers`, 4 chỉ tiêu thời lượng, `byBestStatus`, `answeredCustomers`, `answerRateByCustomer`.
+FE đã nối (`sessionApi.customerReportSummary`).
+
+⚠️ **Chưa deploy lên stg tính đến 2026-08-13**: `list` và `detail` trả 401, riêng `summary` trả
+**404 HTML**. Route ĐÃ có trong `ClientSessionRequestHandler:60` nên không phải lỗi sai package —
+chỉ là jar cũ. FE tự nhận biết 404 và hiện banner vàng, bảng vẫn chạy bình thường.
+
+## 14. `/report/customer/list` buộc client tự đoán cửa sổ thời gian của phiên
+
+**Hiện trạng.** `fromMs`/`toMs` **bắt buộc** (`CustomerReportSearchService:57-60`, ném
+`"Thieu fromMs/toMs"` — chuỗi trần, **không có prefix `CS_`** nên FE không map được sang tiếng Việt).
+Range lọc trên `sessionTimeMs`, và index chia theo **NĂM**. Nhưng khi người dùng đang mở đúng một
+phiên thì BE đã có `sessionId` — thừa sức tự tra mốc phiên.
+
+**FE đang lách.** Neo cửa sổ vào mốc phiên rồi nới `-1 ngày / +400 ngày` (`WINDOW_BEFORE_MS`,
+`WINDOW_AFTER_MS`). Với phiên luồng cũ mốc lấy từ id ghép `sessionId~sessionTimeMs`; luồng mới lấy
+`startTimeMs`/`createdTimeMs`. **Rủi ro giống hệt mục 12d**: đoán sai cửa sổ thì trả **0 dòng, không
+lỗi, không log** — trông y hệt "phiên chưa gọi ai". Phiên chạy vắt qua giao thừa mà lệch index năm
+cũng rơi vào đúng bẫy này.
+
+**Cần BE.** Cho phép gửi `sessionIds` mà **không** cần `fromMs/toMs` (tự tra mốc phiên để chọn index),
+hoặc ít nhất trả mã lỗi có prefix `CS_` để FE dịch được.
+
+**FE đã chặn trước** (2026-08-13): phiên không có mốc thời gian thì bảng KHÔNG gọi API mà báo thẳng
+"không xác định được khoảng tra báo cáo" — nếu cứ gọi thì cửa sổ rơi về 1970 và BE trả rỗng im lặng.
+
+## 15. ~~`totalRingingTimeMs` khai trong entity nhưng chưa nối vào API~~ — ĐÃ XONG
+
+**ĐÃ GIẢI QUYẾT** (commit `54baa3d`): builder set đủ, `toRow()` trả `avgRingingTimeMs` +
+`avgTalkTimeMs` (BE **đã chia sẵn**, FE không tự chia lại), `Attempt` có `ringingTimeMs`/`talkTimeMs`.
+FE đã dựng 2 cột ở bảng + 2 ô ở drawer.
+
+**Ba bẫy phải nhớ khi đụng vào số này** (chép từ javadoc BE, đều đã gặp thật):
+1. Mẫu số là `countRingingTime` (số cuộc **đo được**), KHÔNG phải `totalCall` — nhiều cuộc thiếu mốc
+   trong `call_stacks`. BE đã chia đúng; FE chỉ hiển thị.
+2. `null` = không đo được, `0` = **nghe máy tức thì**. Hai thứ khác hẳn nhau → FE hiện `—` vs `0s`.
+3. **Đàm thoại LUÔN nhỏ hơn `billSec`** và đó là đúng định nghĩa (`min(answer_at)` là lúc chặng đầu
+   tiên nhấc, `billSec` tính từ lúc KHÁCH nhấc). Đo thật: talk 15,17s ↔ bill 20s. Đừng "sửa" cho khớp.
+
+⚠️ **Còn phụ thuộc mapping ES**: commit ghi rõ 4 field mới **chưa có trong mapping index 2026**,
+owner phải chạy bước 6 của `docs/ops/customer-report-index.txt`. Chưa chạy thì consumer lỗi 400 khi
+ghi doc có field mới; riêng phần ĐỌC không lỗi — `sum` trên field chưa khai trả 0, nên UI sẽ hiện
+`0s`/`—` chứ không báo lỗi. Đây là chỗ dễ tưởng nhầm "FE hỏng".
+
+## 16. `/session/report` (luồng cũ) chỉ đếm theo trạng thái, không có thời lượng
+
+Ghi nhận 2026-08-13 khi dựng trang `/sessions/legacy`.
+
+**Hiện trạng.** `CallBotSessionReportData` chỉ có 7 số đếm: `totalSession`, `totalRecord`,
+`totalAnswered/NoAnswer/Failed/Canceled/Processing`. **Không có** `totalBillSec`/`avgBillSec` —
+trong khi `/client-session/report/session` của luồng mới đã có đủ 4 chỉ tiêu thời lượng (commit
+`b94c212`). Cùng gọi là "báo cáo phiên" nhưng hai bên lệch hẳn về nội dung.
+
+**FE đang lách.** Trang luồng cũ chỉ hiện 6 ô đếm, không có ô thời lượng. Muốn xem thời lượng phải
+vào từng phiên rồi mở tab Báo cáo khách hàng (index gom có `totalBillSec`).
+
+**Cần BE.** Bổ sung chỉ tiêu thời lượng cho `/session/report`, hoặc ghi rõ trong doc rằng hai báo
+cáo phiên của hai luồng không cùng bộ chỉ tiêu.
+
+## 17. `keyword` của filter luồng cũ bị bỏ qua im lặng khi ≤ 3 ký tự
+
+**Hiện trạng.** `CallBotSessionFilter.query()` chỉ thêm wildcard khi `keyword.length() > 3`. Gửi
+"abc" thì BE **không lọc gì cả** và trả về mọi phiên — không lỗi, không cảnh báo. Người dùng tưởng
+đã lọc và đọc nhầm kết quả.
+
+**FE đang lách.** Không gửi keyword ngắn hơn 4 ký tự, và hiện banner vàng nói rõ "kết quả chưa lọc
+theo tên" (`/sessions/legacy`).
+
+**Cần BE.** Hoặc bỏ ngưỡng, hoặc trả cảnh báo trong response để client biết filter không được áp.
+
+---
+
 ## Ghi chú thêm: mã lỗi là prefix trong `message`
 
 Lỗi nghiệp vụ trả về dạng `"CS_XXX: mô tả"` trong `message`, **không có field `errorCode` riêng**,

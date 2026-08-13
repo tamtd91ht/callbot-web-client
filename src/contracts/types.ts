@@ -308,6 +308,191 @@ export interface CloneSessionResult {
   importBatchId?: string | null;
 }
 
+// ===== Báo cáo khách hàng (A-05) — index gom, MỘT KH = MỘT DÒNG trong MỘT phiên =====
+
+/**
+ * ⚠️ TỈ LỆ NGHE MÁY Ở ĐÂY KHÁC `SessionReport`, VÀ CẢ HAI ĐỀU ĐÚNG.
+ * Báo cáo này mẫu số là KHÁCH (mỗi KH 1 dòng, lấy `bestStatus` = kết quả TỐT NHẤT của mọi lần
+ * gọi); `SessionReport` mẫu số là CUỘC. Khách gọi 3 lần, lần cuối mới nghe máy: ở đây tính
+ * 1 khách / 1 nghe máy, báo cáo phiên tính 3 cuộc / 1 nghe máy.
+ * BE dặn phải ghi nhãn rõ trên UI, nếu không người dùng sẽ báo lỗi số liệu.
+ */
+export interface CustomerReportRow {
+  phoneNumber: string;
+  /** Rỗng = số chưa khớp danh bạ CRM (lọc được qua `hasContact`). */
+  contactId?: string | null;
+  contactName?: string | null;
+  sessionId: string;
+  sessionTimeMs: number;
+  /** TỔNG record, gồm cả FAILED chưa từng quay số. Để đối chiếu, KHÔNG dùng làm mẫu số. */
+  totalRecord?: number | null;
+  /** Số lần THỰC SỰ quay số = totalRecord - totalFailedPreDial. Đây mới là mẫu số. */
+  totalCall?: number | null;
+  /** FAILED trước khi qua wrapper (trùng SĐT, DNC, hết số dư) — chưa từng quay số. */
+  totalFailedPreDial?: number | null;
+  totalAnswered?: number | null;
+  totalNoAnswer?: number | null;
+  totalFailed?: number | null;
+  totalCanceled?: number | null;
+  /** Kết quả TỐT NHẤT trong mọi lần gọi. */
+  bestStatus?: string | null;
+  /** Trạng thái của lần gọi CUỐI theo thời gian. */
+  lastStatus?: string | null;
+  totalBillSec?: number | null;
+  totalAnswerSec?: number | null;
+  /**
+   * TB thời gian đổ chuông (ms). BE đã chia sẵn cho `countRingingTime` (số cuộc ĐO ĐƯỢC),
+   * KHÔNG phải `totalCall` — nhiều cuộc thiếu mốc trong `call_stacks`.
+   * null = chưa đo được cuộc nào; 0 = nghe máy tức thì. Hai thứ khác hẳn nhau.
+   */
+  avgRingingTimeMs?: number | null;
+  /** TB thời gian đàm thoại (ms). LUÔN NHỎ HƠN totalBillSec và đó là đúng — xem `CustomerReportAttempt`. */
+  avgTalkTimeMs?: number | null;
+  firstCallTimeMs?: number | null;
+  lastCallTimeMs?: number | null;
+  /** BE tính sẵn = totalCall - 1 (không âm) để mọi client hiển thị giống nhau. */
+  retriedCalls?: number | null;
+}
+
+/**
+ * Ô tổng hợp của màn báo cáo KH — `POST /report/customer/summary`.
+ * Dùng ĐÚNG bộ lọc của `/report/customer/list` nên số trên ô luôn khớp danh sách bên dưới.
+ */
+export interface CustomerReportSummary {
+  totalCustomers: number;
+  totalRecord: number;
+  totalCall: number;
+  totalAnswered: number;
+  totalNoAnswer: number;
+  totalFailed: number;
+  totalBillSec: number;
+  /** = totalBillSec / totalCall (mọi cuộc đã quay số). */
+  avgBillSec?: number | null;
+  totalAnswerSec: number;
+  /** = totalAnswerSec / totalAnswered — CHỈ cuộc nghe máy. Chia totalCall ra số thấp giả tạo. */
+  avgAnswerSec?: number | null;
+  avgRingingTimeMs?: number | null;
+  avgTalkTimeMs?: number | null;
+  byBestStatus: Record<string, number>;
+  answeredCustomers: number;
+  /**
+   * ⚠️ Mẫu số là số KHÁCH, khác `SessionReport.answerRate` vốn mẫu số là số CUỘC.
+   * Khách gọi 3 lần, lần cuối mới nghe: ô này 1/1, báo cáo phiên 1/3. Hai số lệch nhau là ĐÚNG.
+   */
+  answerRateByCustomer: number;
+}
+
+/** Một lần gọi trong `CustomerReportDetail.attempts`. */
+export interface CustomerReportAttempt {
+  recordId?: string | null;
+  status?: string | null;
+  callTimeMs?: number | null;
+  cause?: string | null;
+  /** Lần gọi lại thứ mấy; null/0 = lần gọi đầu. */
+  retryCount?: number | null;
+  /** true = FAILED trước khi qua wrapper, chưa từng quay số. */
+  isFailedPreDial?: boolean | null;
+  /** Từ CDR; null = chưa tra được / chưa ra tổng đài (KHÔNG phải 0 giây). */
+  billSec?: number | null;
+  answerSec?: number | null;
+  /**
+   * Đổ chuông (ms) = min(answer_at) - min(ringing_at) trên TOÀN BỘ call_stacks.
+   * null = thiếu mốc, không đo được; 0 = nghe máy tức thì.
+   * Là chỉ số của TOÀN LUỒNG (hai mốc có thể đến từ hai stack khác nhau), không riêng chặng callbot.
+   */
+  ringingTimeMs?: number | null;
+  /**
+   * Đàm thoại (ms) = time_end_call - min(answer_at).
+   * ⚠️ LUÔN NHỎ HƠN `billSec` và đó là ĐÚNG: min(answer_at) là lúc chặng ĐẦU TIÊN nhấc máy
+   * (thường internal_group), còn billSec tính từ lúc KHÁCH nhấc. Đo thật: talk 15,17s ↔ bill 20s.
+   * Đừng "sửa" cho khớp — hai đại lượng đo hai thứ khác nhau.
+   */
+  talkTimeMs?: number | null;
+}
+
+/** Chi tiết 1 KH — chỉ API detail mới trả `attempts` (list bỏ đi cho nhẹ response). */
+export interface CustomerReportDetail extends CustomerReportRow {
+  refId?: string | null;
+  rootRecordIds?: string[] | null;
+  lastCause?: string | null;
+  attempts?: CustomerReportAttempt[] | null;
+  birthdayString?: string | null;
+  gender?: string | null;
+  customerStatus?: string[] | null;
+  buildCount?: number | null;
+}
+
+/** Field BE cho phép sort — ngoài whitelist này BE lặng lẽ rơi về `lastCallTimeMs`. */
+export type CustomerReportSortField =
+  | 'lastCallTimeMs' | 'firstCallTimeMs' | 'totalCall' | 'totalRecord'
+  | 'totalAnswered' | 'totalBillSec' | 'totalAnswerSec';
+
+export interface CustomerReportQuery {
+  /** BẮT BUỘC — BE chọn index theo NĂM từ khoảng này; thiếu là ném lỗi. */
+  fromMs: number;
+  toMs: number;
+  sessionIds?: string[];
+  bestStatuses?: string[];
+  /** true = chỉ KH đã khớp danh bạ · false = chỉ số lạ · undefined = tất cả. */
+  hasContact?: boolean;
+  keyword?: string;
+  minCalls?: number;
+  size?: number;
+  /** search_after của trang trước; BE trần 200/trang, không dùng from/size sâu. */
+  cursor?: string[];
+  sortField?: CustomerReportSortField;
+  sortAsc?: boolean;
+}
+
+export interface CustomerReportPage {
+  data: CustomerReportRow[];
+  total: number;
+  /** null = hết trang. Dựa vào đây để dừng, ĐỪNG đoán bằng độ dài mảng. */
+  nextCursor: string[] | null;
+  size: number;
+}
+
+// ===== Phiên LUỒNG CŨ (CallBotHandler) — /session/search + /session/report =====
+
+/** Trạng thái gốc của phiên luồng cũ. KHÁC `ClientSessionStatus` của luồng mới. */
+export type LegacySessionStatus = 'PROCESSING' | 'PAUSING' | 'CANCELED' | 'DONE';
+
+/**
+ * Bộ lọc phiên luồng cũ (`CallBotSessionFilter`). Khác `/client-session/search` ở chỗ
+ * BE **thật sự đọc** các filter này, nên lọc chạy phía SERVER.
+ */
+export interface LegacySessionFilter {
+  /**
+   * BẮT BUỘC cả hai. `CallBotFilter.validate()` ném `"invalid time range"` (chuỗi trần,
+   * KHÔNG có prefix CS_) khi thiếu, và so sánh là `fromDate >= toDate` → **bằng nhau cũng lỗi**.
+   * ⚠️ `toDate` tương lai bị kẹp về `now` TRƯỚC khi so sánh.
+   */
+  fromDate: number;
+  toDate: number;
+  status?: LegacySessionStatus[];
+  /** ⚠️ BE chỉ áp dụng khi độ dài > 3 ký tự — ngắn hơn thì BỎ QUA IM LẶNG, trả về mọi phiên. */
+  keyword?: string;
+  scriptUUIDs?: string[];
+  sipNumbers?: string[];
+  page?: number;
+  size?: number;
+}
+
+/**
+ * Tổng hợp báo cáo phiên luồng cũ (`POST /session/report` → `CallBotSessionReportData`).
+ * Mẫu số là **CUỘC GỌI** (record), không phải khách — khác `CustomerReportSummary`.
+ * Không có phần thời lượng: service luồng cũ chỉ đếm theo trạng thái record.
+ */
+export interface LegacySessionReport {
+  totalSession: number;
+  totalRecord: number;
+  totalAnswered: number;
+  totalNoAnswer: number;
+  totalFailed: number;
+  totalCanceled: number;
+  totalProcessing: number;
+}
+
 // ===== Envelope (BE dùng {code,message,data} — BFF giữ nguyên) =====
 
 export interface ApiEnvelope<T> {
