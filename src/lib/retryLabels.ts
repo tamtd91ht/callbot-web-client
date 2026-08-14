@@ -26,6 +26,9 @@ const ATTRIBUTE_LABELS: Record<string, string> = {
   SUBSCRIBER_UNAVAILABLE: 'ngoài vùng phủ sóng',
   REJECTED: 'nhà mạng chặn',
   UNKNOWN_ERROR: 'lỗi chưa xác định',
+  VOICE_MAIL: 'voicemail',
+  NUMBER_NOT_EXIST: 'thuê bao không tồn tại, tạm khoá',
+  CALL_BARRED: 'thuê bao chặn cuộc gọi',
 };
 
 /**

@@ -143,18 +143,27 @@ export function emitStats(state: MockSessionState): void {
 /**
  * Bốc ngẫu nhiên một NHÓM kết quả cho cuộc không kết nối được, theo phân bố THẬT.
  *
- * Tỉ lệ lấy từ CDR production tháng 8/2026 (1,95 triệu cuộc callbot), đã chuẩn hoá trên tập cuộc
- * chưa kết nối: nhà mạng chặn ~57%, ngoài vùng phủ ~23%, bận ~10%, không nghe máy ~7%, lỗi ~3%.
- * Cố ý KHÔNG chia đều 5 nhóm — chia đều sẽ khiến người thử mock tưởng "nhà mạng chặn" cũng chỉ như
+ * Tỉ lệ lấy từ CDR production tháng 8/2026 (1,95 triệu cuộc callbot), chuẩn hoá trên tập cuộc chưa
+ * kết nối: nhà mạng chặn ~55%, ngoài vùng phủ ~23%, bận ~9%, không nghe máy ~7%, lỗi ~2,5%, số không
+ * tồn tại ~1,1%, thuê bao chặn ~0,8%, voicemail ~1,5%.
+ *
+ * Cố ý KHÔNG chia đều 8 nhóm — chia đều sẽ khiến người thử mock tưởng "nhà mạng chặn" cũng chỉ như
  * mọi nhóm khác, trong khi thật ra nó áp đảo và là nhóm dễ gây gọi lại tràn lan nhất.
+ *
+ * ⚠️ Mock đơn giản hoá một điểm so với BE thật: ở đây voicemail là một nhánh của cuộc KHÔNG nghe
+ * máy, còn thực tế 68% cuộc voicemail có bill_sec > 0 (hộp thư tự nhấc máy) và BE phải cắt voicemail
+ * TRƯỚC cả `answered` mới phân loại đúng. Muốn kiểm chứng luật đó phải chạy real mode.
  */
 function pickAttributeCode(): string {
   const r = Math.random();
-  if (r < 0.57) return 'REJECTED';
-  if (r < 0.80) return 'SUBSCRIBER_UNAVAILABLE';
-  if (r < 0.90) return 'BUSY';
-  if (r < 0.97) return 'NO_ANSWER';
-  return 'UNKNOWN_ERROR';
+  if (r < 0.55) return 'REJECTED';
+  if (r < 0.78) return 'SUBSCRIBER_UNAVAILABLE';
+  if (r < 0.87) return 'BUSY';
+  if (r < 0.94) return 'NO_ANSWER';
+  if (r < 0.965) return 'UNKNOWN_ERROR';
+  if (r < 0.977) return 'NUMBER_NOT_EXIST';
+  if (r < 0.985) return 'CALL_BARRED';
+  return 'VOICE_MAIL';
 }
 
 export function emitLifecycle(state: MockSessionState, cause: string | null): void {

@@ -253,7 +253,8 @@ export function DistributionModal({
               </p>
               <p className="mt-1 text-xs text-(--color-muted)">
                 Cuộc <b>đã nghe máy</b> không thuộc nhóm nào ở đây — điều kiện này chỉ áp cho cuộc
-                không kết nối được.
+                không kết nối được. Ngoại lệ là <b>Voicemail</b>: hộp thư tự nhấc máy nên tổng đài
+                ghi nhận đã kết nối, nhưng khách chưa hề nghe, vì vậy vẫn gọi lại được.
               </p>
             </div>
           )}
@@ -363,8 +364,11 @@ const CALL_ATTRIBUTE_CODES: { code: string; label: string; share: string; warn?:
   { code: 'NO_ANSWER', label: 'Không nghe máy', share: '~6%' },
   { code: 'BUSY', label: 'Bận', share: '~8%' },
   { code: 'SUBSCRIBER_UNAVAILABLE', label: 'Ngoài vùng phủ sóng', share: '~18%' },
-  { code: 'REJECTED', label: 'Nhà mạng chặn', share: '~45%', warn: true },
+  { code: 'REJECTED', label: 'Nhà mạng chặn', share: '~44%', warn: true },
   { code: 'UNKNOWN_ERROR', label: 'Lỗi chưa xác định', share: '~2%' },
+  { code: 'VOICE_MAIL', label: 'Voicemail', share: '~0,3%' },
+  { code: 'NUMBER_NOT_EXIST', label: 'Thuê bao không tồn tại, tạm khoá', share: '~0,8%' },
+  { code: 'CALL_BARRED', label: 'Thuê bao chặn cuộc gọi', share: '~0,6%' },
 ];
 
 /** Bật/tắt một mã kết quả. Giữ thứ tự theo danh mục để payload ổn định giữa các lần sửa. */
