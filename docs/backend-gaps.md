@@ -333,6 +333,34 @@ theo tên" (`/sessions/legacy`).
 
 **Cần BE.** Hoặc bỏ ngưỡng, hoặc trả cảnh báo trong response để client biết filter không được áp.
 
+## 18. `CALL_ATTRIBUTE`: BE không validate `actionCodes` thuộc danh mục — mã sai im lặng không khớp
+
+**Hiện trạng.** `RetryConfig.firstInvalidReason()` chỉ đòi `actionCodes` KHÔNG RỖNG, không kiểm giá
+trị. Gửi `{"trigger":"CALL_ATTRIBUTE","actionCodes":["MAY_BAN"]}` (thay vì `"BUSY"`) thì request
+**qua validate bình thường**, phiên chạy, và **không cuộc nào được gọi lại** — không lỗi, không cảnh
+báo cho người dùng. Cố ý theo nguyên tắc "`actionCodes` là list MỞ" (`RetryConfig:66-68`), và không
+sửa được ở tầng `RetryConfig` vì đó là đường đi chung với luồng cũ đang chạy production.
+
+**FE đang lách.** Chỉ cho chọn 5 nhóm cố định qua checkbox (`CALL_ATTRIBUTE_CODES` trong
+`DistributionModal.tsx`), không có ô nhập tự do → người dùng qua UI không tạo được mã sai.
+
+**Cần BE.** Nếu về sau có client khác gọi thẳng API (Omiflow, script tích hợp), nên chặn ở
+`ClientSessionConfigValidator` (chỉ luồng web, không đụng luồng cũ) — BE đã có sẵn
+`HangupCauseCatalog.supportedCodes()` để đối chiếu. Hiện chỉ WARN trong log ở
+`ClientRuntimeSessionFactory`.
+
+## 19. `CALL_ATTRIBUTE`: chưa có cờ tắt riêng cho trigger mới
+
+**Hiện trạng.** Cờ duy nhất là `callbot.client-session.retry.call-result.enabled` — tắt nó là tắt
+**TOÀN BỘ** đường gọi lại, kể cả `CALL_STATUS`/`NO_ANSWER` đã chạy production nhiều năm. Muốn tắt
+riêng tính năng mới khi có sự cố thì không có cách nào ngoài rollback.
+
+**FE đang lách.** Không lách được — đây là cờ phía BE. Đường tắt thực tế hiện nay là rollback FE
+(bỏ radio "Theo kết quả cuộc gọi"), vì không có option thì không ai tạo được cấu hình mới.
+
+**Cần BE.** Thêm `callbot.client-session.retry.call-attribute.enabled` (mặc định `true`), kiểm ngay
+đầu `decideByCallAttribute` và trả `NOT_CONFIGURED`. Đáng làm vì nhóm `REJECTED` chạm ~45% traffic.
+
 ---
 
 ## Ghi chú thêm: mã lỗi là prefix trong `message`

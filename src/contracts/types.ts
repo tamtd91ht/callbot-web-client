@@ -21,7 +21,7 @@ export type DedupeMode = 'NONE' | 'PHONE' | 'FIELD';
  * `NO_ANSWER` vì thế giờ là một GIÁ TRỊ của actionCodes, không còn là trigger.
  * CONTACT_* mới là khung ở BE — chưa gọi lại lần nào, đừng mở cho người dùng chọn.
  */
-export type RetryTrigger = 'CALL_STATUS' | 'CONTACT_ATTRIBUTE' | 'CONTACT_STATUS';
+export type RetryTrigger = 'CALL_STATUS' | 'CALL_ATTRIBUTE' | 'CONTACT_ATTRIBUTE' | 'CONTACT_STATUS';
 export type VariablePriority = 'SESSION_DATA_FIRST' | 'CRM_CONTACT_FIRST';
 export type AppendMode = 'RUN_NOW' | 'RUN_AFTER';
 

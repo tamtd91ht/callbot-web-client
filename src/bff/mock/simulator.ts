@@ -50,8 +50,17 @@ function tick(state: MockSessionState): void {
         // CONTACT_STATUS: BE đã chạy được (so actionCodes với filterContacts của khách qua contact ES),
         // nhưng mock KHÔNG mô phỏng — store mock không có trạng thái khách. Chọn trigger đó ở mock thì
         // không thấy gọi lại; muốn kiểm chứng phải chạy real mode.
-        if (retry && retry.trigger === 'CALL_STATUS'
-          && (retry.actionCodes ?? []).some((c) => c.trim().toUpperCase() === 'NO_ANSWER')
+        // [CALL_ATTRIBUTE] Cuộc không kết nối được mang thêm NHÓM kết quả chi tiết. Phân bố bám tỉ
+        // lệ đo trên CDR production tháng 8/2026 để mock không cho cảm giác sai về mức độ ảnh hưởng:
+        // REJECTED (nhà mạng chặn) chiếm gần nửa, không phải một ca hiếm.
+        const attributeCode = pickAttributeCode();
+        const matchesTrigger = retry && (
+          (retry.trigger === 'CALL_STATUS'
+            && (retry.actionCodes ?? []).some((c) => c.trim().toUpperCase() === 'NO_ANSWER'))
+          || (retry.trigger === 'CALL_ATTRIBUTE'
+            && (retry.actionCodes ?? []).some((c) => c.trim().toUpperCase() === attributeCode))
+        );
+        if (retry && matchesTrigger
           && retried < retry.maxRetry) {
           // clone-retry: quay lại hàng đợi, giữ priority (mô phỏng appendRecordsRetryCall)
           row.variables = { ...row.variables, __retryCount: String(retried + 1) };
@@ -129,6 +138,23 @@ export function emitStats(state: MockSessionState): void {
       counters,
     },
   });
+}
+
+/**
+ * Bốc ngẫu nhiên một NHÓM kết quả cho cuộc không kết nối được, theo phân bố THẬT.
+ *
+ * Tỉ lệ lấy từ CDR production tháng 8/2026 (1,95 triệu cuộc callbot), đã chuẩn hoá trên tập cuộc
+ * chưa kết nối: nhà mạng chặn ~57%, ngoài vùng phủ ~23%, bận ~10%, không nghe máy ~7%, lỗi ~3%.
+ * Cố ý KHÔNG chia đều 5 nhóm — chia đều sẽ khiến người thử mock tưởng "nhà mạng chặn" cũng chỉ như
+ * mọi nhóm khác, trong khi thật ra nó áp đảo và là nhóm dễ gây gọi lại tràn lan nhất.
+ */
+function pickAttributeCode(): string {
+  const r = Math.random();
+  if (r < 0.57) return 'REJECTED';
+  if (r < 0.80) return 'SUBSCRIBER_UNAVAILABLE';
+  if (r < 0.90) return 'BUSY';
+  if (r < 0.97) return 'NO_ANSWER';
+  return 'UNKNOWN_ERROR';
 }
 
 export function emitLifecycle(state: MockSessionState, cause: string | null): void {

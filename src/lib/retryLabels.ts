@@ -5,11 +5,27 @@
  */
 import type { RetryConfig } from '@/contracts/types';
 
+/** Mã của trigger CALL_STATUS — mức TỔNG (nghe máy / không nghe máy). */
 const CODE_LABELS: Record<string, string> = {
   NO_ANSWER: 'không nghe máy',
   ANSWER: 'có nghe máy',
   VOICE_MAIL: 'hộp thư thoại',
   BUSY: 'máy bận',
+};
+
+/**
+ * Nhãn nhóm của trigger CALL_ATTRIBUTE — mức CHI TIẾT, quy từ hangup cause Q.850/FreeSWITCH.
+ *
+ * ⚠️ Phải là bảng RIÊNG, không gộp vào `CODE_LABELS`: mã `NO_ANSWER` tồn tại ở CẢ HAI danh mục với
+ * nghĩa khác nhau (ở đây HẸP hơn — không gồm máy bận / ngoài vùng phủ sóng). Gộp chung thì mô tả sẽ
+ * đúng chữ nhưng sai nghĩa, mà sai kiểu đó không ai nhìn ra vì câu vẫn đọc trôi.
+ */
+const ATTRIBUTE_LABELS: Record<string, string> = {
+  NO_ANSWER: 'không nghe máy',
+  BUSY: 'bận',
+  SUBSCRIBER_UNAVAILABLE: 'ngoài vùng phủ sóng',
+  REJECTED: 'nhà mạng chặn',
+  UNKNOWN_ERROR: 'lỗi chưa xác định',
 };
 
 /**
@@ -33,5 +49,7 @@ export function describeRetryCondition(
       : `Theo trạng thái khách hàng (${codes.length} trạng thái)`;
   }
   if (codes.length === 0) return 'Chưa chọn điều kiện';
-  return `Khi ${codes.map((c) => CODE_LABELS[c.trim().toUpperCase()] ?? c).join(', ')}`;
+  // Mỗi trigger tra ĐÚNG bảng của nó — xem cảnh báo ở ATTRIBUTE_LABELS.
+  const labels = retry.trigger === 'CALL_ATTRIBUTE' ? ATTRIBUTE_LABELS : CODE_LABELS;
+  return `Khi ${codes.map((c) => labels[c.trim().toUpperCase()] ?? c).join(', ')}`;
 }

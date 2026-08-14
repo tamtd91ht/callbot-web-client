@@ -151,25 +151,32 @@ export function DistributionModal({
           </label>
           {draft.retryConfig && (
             <div className="mt-3">
-              <Field label="Gọi lại theo">
-                <select className={inputClass} value={draft.retryConfig.trigger}
-                  onChange={(e) => setDraft({
-                    ...draft,
-                    retryConfig: {
-                      ...draft.retryConfig!,
-                      trigger: e.target.value as RetryTrigger,
-                      // XOÁ actionCodes khi đổi trigger: mã của CALL_STATUS ("NO_ANSWER") và của
-                      // CONTACT_STATUS ("1", "1-1") thuộc hai danh mục khác hẳn nhau. Giữ lại là
-                      // gửi lên BE một cấu hình không bao giờ khớp được gì.
-                      actionCodes: [],
-                    },
-                  })}>
-                  <option value="CALL_STATUS">Kết quả cuộc gọi</option>
-                  <option value="CONTACT_STATUS">Trạng thái khách hàng</option>
-                  {/* CONTACT_ATTRIBUTE: BE đi chung đường với CONTACT_STATUS nhưng chưa có danh mục
-                      thuộc tính riêng để chọn — mở ra thì người dùng không biết điền gì. */}
-                  <option value="CONTACT_ATTRIBUTE" disabled>Thuộc tính khách hàng (chưa hỗ trợ)</option>
-                </select>
+              <Field label="Điều kiện gọi lại — chỉ chọn 1 nhóm">
+                <div className="flex flex-col gap-2">
+                  {RETRY_TRIGGERS.map(({ trigger, label, hint }) => (
+                    <label key={trigger} className="flex items-start gap-2 text-sm">
+                      <input type="radio" name="retryTrigger" className="mt-0.5"
+                        checked={draft.retryConfig!.trigger === trigger}
+                        onChange={() => setDraft({
+                          ...draft,
+                          retryConfig: {
+                            ...draft.retryConfig!,
+                            trigger,
+                            // XOÁ actionCodes khi đổi trigger: mã của CALL_STATUS ("NO_ANSWER"), của
+                            // CALL_ATTRIBUTE ("BUSY", "REJECTED"…) và của CONTACT_STATUS ("1", "1-1")
+                            // thuộc ba danh mục khác hẳn nhau. Giữ lại là gửi lên BE một cấu hình
+                            // không bao giờ khớp được gì — hoặc tệ hơn, khớp NHẦM: "NO_ANSWER" tồn
+                            // tại ở CẢ CALL_STATUS lẫn CALL_ATTRIBUTE nhưng nghĩa HẸP HƠN ở cái sau.
+                            actionCodes: [],
+                          },
+                        })} />
+                      <span>
+                        {label}
+                        <span className="block text-xs text-(--color-muted)">{hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
               </Field>
             </div>
           )}
@@ -212,6 +219,42 @@ export function DistributionModal({
                   })}
                 </div>
               </Field>
+            </div>
+          )}
+          {draft.retryConfig?.trigger === 'CALL_ATTRIBUTE' && draft.retryConfig.maxRetry > 0 && (
+            <div className="mt-3">
+              <Field label="Gọi lại khi kết quả thuộc nhóm">
+                <div className="flex flex-wrap items-center gap-3">
+                  {CALL_ATTRIBUTE_CODES.map(({ code, label, share, warn }) => {
+                    const checked = (draft.retryConfig?.actionCodes ?? []).includes(code);
+                    return (
+                      <label key={code} className="flex items-center gap-1.5 text-sm">
+                        <input type="checkbox" checked={checked}
+                          onChange={() => setDraft({
+                            ...draft,
+                            retryConfig: {
+                              ...draft.retryConfig!,
+                              actionCodes: toggleAttributeCode(draft.retryConfig?.actionCodes, code),
+                            },
+                          })} />
+                        {label}
+                        <span className={`text-xs ${warn ? 'text-(--color-danger)' : 'text-(--color-muted)'}`}>
+                          {share}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </Field>
+              <p className="mt-2 text-xs text-(--color-muted)">
+                Tỉ lệ bên cạnh là <b>phần trăm cuộc gọi thực tế</b> rơi vào nhóm đó (đo trên dữ liệu
+                tháng 8/2026). <b className="text-(--color-danger)">Nhà mạng chặn</b> chiếm gần một
+                nửa số cuộc — bật nhóm này là gọi lại rất nhiều, cân nhắc cùng với số lần tối đa.
+              </p>
+              <p className="mt-1 text-xs text-(--color-muted)">
+                Cuộc <b>đã nghe máy</b> không thuộc nhóm nào ở đây — điều kiện này chỉ áp cho cuộc
+                không kết nối được.
+              </p>
             </div>
           )}
           {draft.retryConfig?.trigger === 'CONTACT_STATUS' && draft.retryConfig.maxRetry > 0 && (
@@ -289,11 +332,58 @@ const CALL_STATUS_CODES: { code: string; label: string; supported: boolean }[] =
   { code: 'BUSY', label: 'Máy bận (chưa hỗ trợ)', supported: false },
 ];
 
+/** Ba nhóm điều kiện gọi lại — loại trừ nhau, đúng 3 radio trên thiết kế. */
+const RETRY_TRIGGERS: { trigger: RetryTrigger; label: string; hint: string }[] = [
+  {
+    trigger: 'CALL_STATUS',
+    label: 'Theo trạng thái cuộc gọi',
+    hint: 'Mức tổng: Trả lời / Không trả lời. Hiện chỉ thực thi "không trả lời".',
+  },
+  {
+    trigger: 'CALL_ATTRIBUTE',
+    label: 'Theo kết quả cuộc gọi',
+    hint: 'Mức chi tiết: bận, ngoài vùng phủ sóng, nhà mạng chặn… (map Q.850/FreeSWITCH).',
+  },
+  {
+    trigger: 'CONTACT_STATUS',
+    label: 'Theo trạng thái khách hàng',
+    hint: 'Theo trạng thái đã gắn cho khách trong phần Khách hàng.',
+  },
+];
+
+/**
+ * Năm nhóm kết quả cuộc gọi của trigger CALL_ATTRIBUTE — khớp
+ * `HangupCauseCatalog.supportedCodes()` phía backend. Cả 5 đều thực thi được.
+ *
+ * `share` là tỉ lệ traffic đo trên CDR production tháng 8/2026 (1,95 triệu cuộc callbot). Hiện lên UI
+ * vì chênh lệch giữa các nhóm rất lớn: bật "Nhà mạng chặn" là gọi lại cho ~43% số cuộc, còn bật
+ * "Bận" chỉ ~8%. Người dùng cần thấy con số đó TRƯỚC khi tick, không phải sau khi hết tiền cước.
+ */
+const CALL_ATTRIBUTE_CODES: { code: string; label: string; share: string; warn?: boolean }[] = [
+  { code: 'NO_ANSWER', label: 'Không nghe máy', share: '~6%' },
+  { code: 'BUSY', label: 'Bận', share: '~8%' },
+  { code: 'SUBSCRIBER_UNAVAILABLE', label: 'Ngoài vùng phủ sóng', share: '~18%' },
+  { code: 'REJECTED', label: 'Nhà mạng chặn', share: '~45%', warn: true },
+  { code: 'UNKNOWN_ERROR', label: 'Lỗi chưa xác định', share: '~2%' },
+];
+
 /** Bật/tắt một mã kết quả. Giữ thứ tự theo danh mục để payload ổn định giữa các lần sửa. */
 function toggleCode(actionCodes: string[] | undefined, code: string): string[] {
   const current = actionCodes ?? [];
   const next = current.includes(code) ? current.filter((c) => c !== code) : [...current, code];
   return CALL_STATUS_CODES.map((c) => c.code).filter((c) => next.includes(c));
+}
+
+/**
+ * Như {@link toggleCode} nhưng cho danh mục CALL_ATTRIBUTE.
+ *
+ * Cố ý là hàm RIÊNG chứ không tổng quát hoá chung một hàm: hai danh mục có mã trùng tên
+ * (`NO_ANSWER`) nhưng nghĩa khác nhau, nên lọc nhầm danh mục sẽ âm thầm rụng mã hợp lệ thay vì báo lỗi.
+ */
+function toggleAttributeCode(actionCodes: string[] | undefined, code: string): string[] {
+  const current = actionCodes ?? [];
+  const next = current.includes(code) ? current.filter((c) => c !== code) : [...current, code];
+  return CALL_ATTRIBUTE_CODES.map((c) => c.code).filter((c) => next.includes(c));
 }
 
 /**
