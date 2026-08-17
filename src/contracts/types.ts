@@ -380,6 +380,45 @@ export interface CustomerReportSummary {
    * Khách gọi 3 lần, lần cuối mới nghe: ô này 1/1, báo cáo phiên 1/3. Hai số lệch nhau là ĐÚNG.
    */
   answerRateByCustomer: number;
+  /** Hai chỉ tiêu TAT theo ngưỡng `tatDays`. Vắng mặt nếu BE chưa có tính năng / agg lỗi. */
+  tat?: CustomerReportTatSummary | null;
+}
+
+/** Một ô TAT: pass/fail theo ngưỡng, kèm số khách KHÔNG đo được. */
+export interface CustomerReportTatBucket {
+  /** Đạt ngưỡng (TAT < ngưỡng). */
+  pass: number;
+  /**
+   * Không đạt — GỒM CẢ khách chưa bao giờ nghe máy (với Connect TAT).
+   * BE tính bằng `measured - pass` chứ không phải đếm TAT >= ngưỡng, vì khách chưa nghe máy
+   * không có giá trị TAT nào để so sánh.
+   */
+  fail: number;
+  /** Số khách ĐO ĐƯỢC = mẫu số của `passRate`. `pass + fail`. */
+  measured: number;
+  /**
+   * Khách KHÔNG đo được: không khớp danh bạ CRM (số lạ), hoặc dòng gom có trước khi BE có
+   * tính năng TAT. ⚠️ KHÔNG phải fail — phải hiển thị riêng, nếu không người đọc sẽ tưởng
+   * mẫu số là toàn bộ khách.
+   */
+  unmeasured: number;
+  /** `pass / measured × 100`. **null = chưa đo được khách nào**, khác hẳn 0%. */
+  passRate: number | null;
+}
+
+export interface CustomerReportTatSummary {
+  /** Ngưỡng BE đã dùng (đã kẹp về [1, 365]) — có thể khác số người dùng gõ. */
+  thresholdDays: number;
+  thresholdMs: number;
+  totalCustomers: number;
+  /** Từ lúc khách vào CRM đến cuộc gọi TRẢ LỜI đầu tiên trong phiên. */
+  connect: CustomerReportTatBucket;
+  /**
+   * Từ lúc khách vào CRM đến cuộc gọi đầu tiên trong phiên (bất kể trả lời).
+   * ⚠️ Không suy ra được từ cột `firstCallTimeMs`: cột đó tính cả record FAILED chưa từng quay số,
+   * còn chỉ tiêu này chỉ tính cuộc thực sự quay số. Hai số lệch nhau là ĐÚNG.
+   */
+  firstCall: CustomerReportTatBucket;
 }
 
 /** Một lần gọi trong `CustomerReportDetail.attempts`. */
@@ -447,6 +486,11 @@ export interface CustomerReportQuery {
   cursor?: string[];
   sortField?: CustomerReportSortField;
   sortAsc?: boolean;
+  /**
+   * Ngưỡng TAT tính bằng NGÀY LỊCH — mặc định BE dùng 3, kẹp về [1, 365].
+   * Chỉ `/report/customer/summary` đọc field này; `/list` bỏ qua.
+   */
+  tatDays?: number;
 }
 
 /**

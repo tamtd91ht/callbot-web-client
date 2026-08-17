@@ -13,7 +13,7 @@ import type {
   AppendMode, CallbotScript, CallRecord, CallRecordFilter, ClientSession, CloneSessionRequest,
   CloneSessionResult, ContactSuggestion, CreateSessionRequest, CrmContactFilter,
   CustomerReportDetail, CustomerReportPage, CustomerReportPageRaw, CustomerReportQuery,
-  CustomerReportSummary, DataRow,
+  CustomerReportSummary, CustomerReportTatBucket, CustomerReportTatSummary, DataRow,
   ImportBatch, ImportExcelResult, LegacySessionFilter, LegacySessionReport,
   Paginated, SessionReport, UpdateSessionRequest,
 } from '@/contracts/types';
@@ -107,6 +107,36 @@ function requireClientSession(id: string, feature: string): void {
   if (isLegacyId(id)) {
     throw new ApiError('CS_INVALID_STATE', `${feature}: phiên luồng cũ chỉ xem, không thao tác được từ app này`);
   }
+}
+
+/**
+ * Chuẩn hoá khối `tat` của ô tổng hợp báo cáo KH.
+ *
+ * Trả `null` khi BE không gửi khối này — hai trường hợp thật: BE chưa deploy tính năng TAT, hoặc
+ * agg lỗi (thường là mapping ES chưa khai field mới) và BE trả map tổng hợp thiếu khối. UI phải
+ * ẩn hẳn hai ô, KHÔNG hiển thị 0% — 0% nghĩa là "đo được và không ai đạt", sai hẳn nghĩa.
+ *
+ * ⚠️ `passRate` giữ nguyên `null` chứ không `?? 0`: null = chưa đo được khách nào (mẫu số 0).
+ * Các số đếm thì `?? 0` được vì BE bỏ field null theo @JsonInclude(NON_NULL).
+ */
+function normalizeTat(raw?: CustomerReportTatSummary | null): CustomerReportTatSummary | null {
+  if (!raw || !raw.connect || !raw.firstCall) {
+    return null;
+  }
+  const bucket = (b?: CustomerReportTatBucket | null): CustomerReportTatBucket => ({
+    pass: b?.pass ?? 0,
+    fail: b?.fail ?? 0,
+    measured: b?.measured ?? 0,
+    unmeasured: b?.unmeasured ?? 0,
+    passRate: b?.passRate ?? null,
+  });
+  return {
+    thresholdDays: raw.thresholdDays ?? 3,
+    thresholdMs: raw.thresholdMs ?? 0,
+    totalCustomers: raw.totalCustomers ?? 0,
+    connect: bucket(raw.connect),
+    firstCall: bucket(raw.firstCall),
+  };
 }
 
 /**
@@ -403,6 +433,7 @@ export const sessionApi = {
       byBestStatus: raw?.byBestStatus ?? {},
       answeredCustomers: raw?.answeredCustomers ?? 0,
       answerRateByCustomer: raw?.answerRateByCustomer ?? 0,
+      tat: normalizeTat(raw?.tat),
     };
   },
 

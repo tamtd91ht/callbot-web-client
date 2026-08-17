@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   ClientSession, CustomerReportRow, CustomerReportSortField, CustomerReportSummary,
+  CustomerReportTatBucket,
 } from '@/contracts/types';
 import { ApiError } from '@/lib/apiClient';
 import { sessionApi } from '@/lib/sessionApi';
@@ -33,6 +34,10 @@ const PAGE_SIZE = 20;
 /** Cửa sổ thời gian quanh mốc phiên — BE bắt buộc fromMs/toMs để chọn index theo NĂM. */
 const WINDOW_BEFORE_MS = 24 * 60 * 60 * 1000;        // 1 ngày trước mốc phiên
 const WINDOW_AFTER_MS = 400 * 24 * 60 * 60 * 1000;   // phiên dài ngày vẫn nằm trong cửa sổ
+
+/** Ngưỡng TAT mặc định (ngày lịch). BE cũng mặc định 3 và kẹp về [1, 365]. */
+const DEFAULT_TAT_DAYS = 3;
+const MAX_TAT_DAYS = 365;
 
 const STATUS_FILTERS: Array<{ key: string; label: string }> = [
   { key: 'ALL', label: 'Tất cả' },
@@ -84,6 +89,11 @@ export function CustomerReportTable({
   const [summary, setSummary] = useState<CustomerReportSummary | null>(null);
   /** true = endpoint tổng hợp trả 404 → service chưa deploy bản mới, không phải hết dữ liệu. */
   const [summaryMissing, setSummaryMissing] = useState(false);
+  /**
+   * Ngưỡng TAT (ngày lịch) — bộ lọc, không phải hằng số: đổi là hai ô TAT tính lại.
+   * Mặc định 3 để khớp mục tiêu nghiệp vụ hiện tại.
+   */
+  const [tatDays, setTatDays] = useState(DEFAULT_TAT_DAYS);
 
   // Phiên luồng cũ mang id ghép "sessionId~sessionTimeMs" — tách ra lấy đúng 2 tham số BE cần.
   const { sessionId, sessionTimeMs } = useMemo(() => parseCompositeId(session.id), [session.id]);
@@ -154,6 +164,7 @@ export function CustomerReportTable({
         hasContact: contactFilter === 'ALL' ? undefined : contactFilter === 'HAS',
         keyword: appliedKeyword || undefined,
         minCalls: minCalls > 0 ? minCalls : undefined,
+        tatDays,
       }));
       setSummaryMissing(false);
     } catch (e) {
@@ -163,7 +174,9 @@ export function CustomerReportTable({
       // Phân biệt với "không có dữ liệu", nếu không sẽ mất thời gian nghi ngờ nhầm chỗ.
       setSummaryMissing(e instanceof ApiError && e.errorCode === 'CS_BAD_GATEWAY');
     }
-  }, [anchorMs, sessionId, status, contactFilter, appliedKeyword, minCalls]);
+    // tatDays nằm trong dep -> đổi ngưỡng là tự gọi lại ô tổng hợp (danh sách KHÔNG đổi nên
+    // load() cố ý không phụ thuộc field này).
+  }, [anchorMs, sessionId, status, contactFilter, appliedKeyword, minCalls, tatDays]);
 
   // Đổi bộ lọc/sort thì cursor cũ VÔ NGHĨA (search_after bám theo giá trị sort) → reset về trang đầu.
   useEffect(() => {
@@ -286,6 +299,51 @@ export function CustomerReportTable({
         </div>
       )}
 
+      {/*
+        Báo cáo TAT — đo độ nhanh tiếp cận khách kể từ lúc khách vào CRM.
+        Ẩn hẳn khi BE không trả khối `tat` (chưa deploy, hoặc mapping ES thiếu field nên agg lỗi):
+        hiện 0% sẽ bị hiểu là "không ai đạt", sai hẳn nghĩa.
+      */}
+      {summary && summary.tat && (
+        <div className="mb-4 rounded-xl border border-(--color-line) p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-semibold">Báo cáo TAT ({tatDays} ngày)</div>
+            <label className="flex items-center gap-2 text-xs text-(--color-muted)">
+              Ngưỡng TAT
+              <input type="number" min={1} max={MAX_TAT_DAYS} value={tatDays}
+                onChange={(e) => setTatDays(clampTatDays(e.target.value))}
+                className="w-16 rounded-(--radius-field) border border-(--color-line) px-2 py-1 text-center text-sm text-(--color-ink) outline-none focus:border-(--color-primary)" />
+              ngày
+            </label>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <TatCard title="Connect TAT" tatDays={tatDays}
+              subtitle="Từ khi vào CRM đến khi kết nối được với KH"
+              bucket={summary.tat.connect} tone="amber" />
+            <TatCard title="First call TAT" tatDays={tatDays}
+              subtitle="Từ khi vào CRM đến cuộc gọi đầu tiên"
+              bucket={summary.tat.firstCall} tone="primary" />
+          </div>
+
+          <div className="mt-3 rounded-lg bg-(--color-field) px-3 py-2 text-[11px] leading-relaxed text-(--color-muted)">
+            <b>Cách tính:</b> <b>Connect</b> = pass nếu thời gian từ lúc khách được tạo trong CRM đến
+            khi <b>nghe máy</b> &lt; {tatDays} ngày · <b>First call</b> = pass nếu từ lúc tạo đến
+            <b> cuộc gọi đầu tiên</b> &lt; {tatDays} ngày. Ngày lịch thường, không trừ cuối tuần/lễ.
+            {' '}Khách <b>chưa bao giờ nghe máy</b> tính là fail.
+            {summary.tat.connect.unmeasured > 0 && (
+              <>
+                {' '}<b className="text-amber-800">
+                  {summary.tat.connect.unmeasured.toLocaleString('vi-VN')} khách không đo được
+                </b>{' '}
+                (không khớp danh bạ CRM, hoặc đã gom trước khi có chỉ tiêu này) — đã loại khỏi mẫu số,
+                không tính là fail.
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {notSubmitted ? (
         <p className="py-6 text-center text-sm text-(--color-muted)">
           Phiên chưa submit nên chưa có khách hàng nào được gọi.
@@ -401,6 +459,62 @@ export function CustomerReportTable({
           onClose={() => setSelected(null)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Ô gõ ngưỡng để rỗng/0 thì rơi về mặc định thay vì gửi 0 (BE kẹp về 1, nhưng để UI và BE lệch
+ * nhau thì người dùng thấy số mình gõ không phải số được tính).
+ */
+function clampTatDays(raw: string): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < 1) {
+    return DEFAULT_TAT_DAYS;
+  }
+  return Math.min(n, MAX_TAT_DAYS);
+}
+
+/** `87,5%` kiểu vi-VN. null = chưa đo được khách nào → gạch ngang, KHÔNG phải 0%. */
+function formatPercent(value: number | null): string {
+  if (value == null) {
+    return '—';
+  }
+  return `${value.toLocaleString('vi-VN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+}
+
+/**
+ * Một ô TAT: phần trăm lớn + thanh tiến độ + dòng "Pass · Fail / tổng".
+ * <p>
+ * Mẫu số hiển thị là `measured` (khách ĐO ĐƯỢC) chứ không phải tổng khách của phiên — số khách
+ * không đo được nêu riêng ở dòng chú thích chung bên dưới hai ô.
+ */
+function TatCard({ title, subtitle, bucket, tatDays, tone }: {
+  title: string;
+  subtitle: string;
+  bucket: CustomerReportTatBucket;
+  tatDays: number;
+  tone: 'amber' | 'primary';
+}) {
+  const pct = bucket.passRate ?? 0;
+  return (
+    <div className="rounded-xl border border-(--color-line) p-3">
+      <div className="text-sm font-semibold">
+        {title} <span className="font-normal text-(--color-muted)">(&lt; {tatDays} ngày)</span>
+      </div>
+      <div className="mt-0.5 text-[11px] text-(--color-muted)">{subtitle}</div>
+      <div className={`mt-2 text-3xl font-bold ${tone === 'amber' ? 'text-amber-600' : 'text-(--color-primary)'}`}>
+        {formatPercent(bucket.passRate)}
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-(--color-field)">
+        <div className={`h-full ${tone === 'amber' ? 'bg-amber-500' : 'bg-(--color-primary)'}`}
+          style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} />
+      </div>
+      <div className="mt-2 text-[11px] text-(--color-muted)">
+        Pass <b className="text-(--color-primary)">{bucket.pass.toLocaleString('vi-VN')}</b>
+        {' · '}Fail <b className="text-(--color-danger)">{bucket.fail.toLocaleString('vi-VN')}</b>
+        {' / '}{bucket.measured.toLocaleString('vi-VN')} khách đo được
+      </div>
     </div>
   );
 }
