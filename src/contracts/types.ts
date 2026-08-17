@@ -438,10 +438,37 @@ export interface CustomerReportQuery {
   keyword?: string;
   minCalls?: number;
   size?: number;
+  /**
+   * Số trang — CHỈ để BE dựng nhãn phân trang (`page_number`/`has_next`/`total_pages`).
+   * KHÔNG nhảy trang bằng field này: gửi `page` mà thiếu `cursor` thì vẫn ra trang đầu.
+   */
+  page?: number;
   /** search_after của trang trước; BE trần 200/trang, không dùng from/size sâu. */
   cursor?: string[];
   sortField?: CustomerReportSortField;
   sortAsc?: boolean;
+}
+
+/**
+ * Response THÔ của `/report/customer/list` — khuôn phân trang chuẩn của hệ (`Paginated` trong
+ * share lib) nên field là **snake_case**, khác phần còn lại của luồng client session.
+ *
+ * Đừng dùng type này trong UI: `sessionApi.customerReport()` đã quy về `CustomerReportPage`
+ * (camelCase). Để ở đây để chỗ map dữ liệu có type thật thay vì `any`.
+ */
+export interface CustomerReportPageRaw {
+  items?: CustomerReportRow[];
+  total_items?: number;
+  page_number?: number;
+  page_size?: number;
+  total_pages?: number;
+  has_next?: boolean;
+  has_previous?: boolean;
+  next_page?: number;
+  previous_page?: number;
+  max_size?: number;
+  /** Ngoài khuôn Paginated — thứ duy nhất đi sâu quá 10.000 doc được. */
+  nextCursor?: string[] | null;
 }
 
 export interface CustomerReportPage {
@@ -450,6 +477,12 @@ export interface CustomerReportPage {
   /** null = hết trang. Dựa vào đây để dừng, ĐỪNG đoán bằng độ dài mảng. */
   nextCursor: string[] | null;
   size: number;
+  /** Nhãn hiển thị. Nhảy trang vẫn phải bằng `nextCursor`, không bằng số này. */
+  pageNumber: number;
+  totalPages: number;
+  /** Tín hiệu dừng chuẩn — BE tính theo còn cursor hay không, không theo phép chia total/size. */
+  hasNext: boolean;
+  hasPrevious: boolean;
 }
 
 // ===== Phiên LUỒNG CŨ (CallBotHandler) — /session/search + /session/report =====

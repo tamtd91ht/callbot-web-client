@@ -12,7 +12,8 @@
 import type {
   AppendMode, CallbotScript, CallRecord, CallRecordFilter, ClientSession, CloneSessionRequest,
   CloneSessionResult, ContactSuggestion, CreateSessionRequest, CrmContactFilter,
-  CustomerReportDetail, CustomerReportPage, CustomerReportQuery, CustomerReportSummary, DataRow,
+  CustomerReportDetail, CustomerReportPage, CustomerReportPageRaw, CustomerReportQuery,
+  CustomerReportSummary, DataRow,
   ImportBatch, ImportExcelResult, LegacySessionFilter, LegacySessionReport,
   Paginated, SessionReport, UpdateSessionRequest,
 } from '@/contracts/types';
@@ -320,13 +321,21 @@ export const sessionApi = {
    */
   async customerReport(query: CustomerReportQuery): Promise<CustomerReportPage> {
     requireRealMode('Báo cáo khách hàng');
-    const raw = await cs<Partial<CustomerReportPage>>('/report/customer/list', query);
-    // BE bỏ field null (@JsonInclude NON_NULL) → data/nextCursor có thể VẮNG MẶT chứ không phải null.
+    const raw = await cs<CustomerReportPageRaw>('/report/customer/list', query);
+    // BE trả khuôn phân trang chuẩn của hệ (Paginated) — field snake_case: items/total_items/...
+    // Quy về camelCase ngay tại đây để UI không phải biết chuyện đó.
+    // BE bỏ field null (@JsonInclude NON_NULL) → items/nextCursor có thể VẮNG MẶT chứ không phải null.
     return {
-      data: raw?.data ?? [],
-      total: raw?.total ?? 0,
+      data: raw?.items ?? [],
+      total: raw?.total_items ?? 0,
       nextCursor: raw?.nextCursor ?? null,
-      size: raw?.size ?? (query.size ?? 20),
+      size: raw?.page_size ?? (query.size ?? 20),
+      pageNumber: raw?.page_number ?? (query.page ?? 1),
+      totalPages: raw?.total_pages ?? 0,
+      // hasNext của BE tính theo CÒN CURSOR hay không (chuẩn hơn phép chia total/size:
+      // trang cuối vẫn có thể đủ size dòng). Thiếu field thì suy lại từ cursor, không từ số trang.
+      hasNext: raw?.has_next ?? raw?.nextCursor != null,
+      hasPrevious: raw?.has_previous ?? false,
     };
   },
 

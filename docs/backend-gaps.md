@@ -363,6 +363,27 @@ riêng tính năng mới khi có sự cố thì không có cách nào ngoài rol
 
 ---
 
+## 20. `/report/customer/list`: có nhãn số trang nhưng KHÔNG nhảy trang được
+
+**Hiện trạng (2026-08-17).** Endpoint đã trả theo khuôn phân trang chuẩn của hệ (`Paginated`:
+`items`/`total_items`/`page_number`/`total_pages`/`has_next`…), nhưng bên dưới **vẫn là
+`search_after`**. `page` gửi lên chỉ để BE dựng nhãn — gửi `page=5` mà thiếu `cursor` thì vẫn
+nhận trang đầu.
+
+**Vì sao không sửa cho "đúng" hẳn.** ES chặn from/size sâu ở 10.000 doc
+(`index.max_result_window`), mà báo cáo một phiên có thể 200k khách. Chuyển sang from/size thật
+sẽ ném `Result window is too large` từ khoảng trang 200 trở đi — hỏng đúng lúc dữ liệu nhiều,
+tức là đúng lúc người ta cần báo cáo nhất.
+
+**FE đang làm gì.** `CustomerReportTable` giữ `cursorStack`, chỉ có nút Trước/Sau tuần tự và
+truyền số trang kèm theo để BE dựng nhãn. **Đừng dựng UI nhảy tới trang bất kỳ** (ô nhập số
+trang, danh sách 1·2·3·…) trên endpoint này — nó sẽ không chạy.
+
+**Cần BE nếu thật sự muốn nhảy trang.** Phải đổi cách đánh chỉ mục (vd thêm field số thứ tự ổn
+định để seek theo range) chứ không phải sửa tầng API. Chưa có nhu cầu thật nên chưa làm.
+
+---
+
 ## Ghi chú thêm: mã lỗi là prefix trong `message`
 
 Lỗi nghiệp vụ trả về dạng `"CS_XXX: mô tả"` trong `message`, **không có field `errorCode` riêng**,

@@ -12,9 +12,11 @@
  * ở đây mẫu số là KHÁCH, bên kia là CUỘC. Khách gọi 3 lần, lần cuối mới nghe máy → ở đây
  * 1/1 = 100%, báo cáo phiên 1/3 = 33%. Không ghi nhãn thì chắc chắn bị báo "lỗi số liệu".
  *
- * PHÂN TRANG LÀ CURSOR (search_after), KHÔNG phải số trang: BE không trả tổng số trang và
- * ES chặn from/size sâu ở 10.000 doc. Nên chỉ đi tiến/lùi tuần tự — muốn lùi phải tự nhớ
- * cursor các trang đã qua (stack bên dưới), không tính ngược được.
+ * PHÂN TRANG LÀ CURSOR (search_after), KHÔNG phải số trang. BE trả response theo khuôn phân
+ * trang chuẩn của hệ (Paginated: total_items/page_number/total_pages/has_next…) nhưng đó chỉ là
+ * NHÃN HIỂN THỊ — không nhảy tới trang bất kỳ được, vì ES chặn from/size sâu ở 10.000 doc.
+ * Nên vẫn chỉ đi tiến/lùi tuần tự: muốn lùi phải tự nhớ cursor các trang đã qua (stack bên
+ * dưới), và số trang gửi lên BE được truyền kèm để BE dựng đúng nhãn.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
@@ -93,7 +95,7 @@ export function CustomerReportTable({
    */
   const anchorMs = sessionTimeMs || session.startTimeMs || session.createdTimeMs || 0;
 
-  const load = useCallback(async (cursor: string[] | null) => {
+  const load = useCallback(async (cursor: string[] | null, pageNumber = 1) => {
     // Không có mốc thì cửa sổ rơi về 1970 → BE quét index năm 1970 → TRẢ RỖNG, KHÔNG LỖI,
     // KHÔNG LOG, nhìn y hệt "phiên chưa gọi ai". Thà báo thẳng còn hơn để đọc nhầm số liệu.
     if (!anchorMs) {
@@ -114,6 +116,11 @@ export function CustomerReportTable({
         minCalls: minCalls > 0 ? minCalls : undefined,
         size: PAGE_SIZE,
         cursor: cursor ?? undefined,
+        // Số trang chỉ để BE dựng nhãn phân trang; đi tiếp vẫn bằng cursor ở trên.
+        // Truyền qua THAM SỐ chứ không đọc cursorStack: cursorStack không nằm trong deps của
+        // useCallback này, đọc trong closure sẽ dính giá trị cũ (và thêm vào deps thì mỗi lần
+        // đổi trang lại tạo hàm mới, kéo theo load thừa).
+        page: pageNumber,
         sortField,
         sortAsc,
       });
@@ -161,22 +168,23 @@ export function CustomerReportTable({
   // Đổi bộ lọc/sort thì cursor cũ VÔ NGHĨA (search_after bám theo giá trị sort) → reset về trang đầu.
   useEffect(() => {
     setCursorStack([null]);
-    void load(null);
+    void load(null, 1);
   }, [load, refreshKey]);
 
   useEffect(() => { void loadSummary(); }, [loadSummary, refreshKey]);
 
   const goNext = () => {
     if (!nextCursor) return;
+    // cursorStack khoi tao [null] nen length = SO TRANG dang xem; sang trang ke = length + 1.
     setCursorStack((s) => [...s, nextCursor]);
-    void load(nextCursor);
+    void load(nextCursor, cursorStack.length + 1);
   };
 
   const goPrev = () => {
     if (cursorStack.length <= 1) return;
     const stack = cursorStack.slice(0, -1);
     setCursorStack(stack);
-    void load(stack[stack.length - 1]);
+    void load(stack[stack.length - 1], stack.length);
   };
 
   const toggleSort = (field: CustomerReportSortField) => {
@@ -204,7 +212,7 @@ export function CustomerReportTable({
             placeholder="Tìm số điện thoại hoặc tên…"
             className="w-56 rounded-(--radius-field) border border-(--color-line) px-3 py-1.5 text-sm outline-none focus:border-(--color-primary)" />
           <Button onClick={() => setAppliedKeyword(keyword.trim())}>Tìm</Button>
-          <Button onClick={() => { void load(cursorStack[cursorStack.length - 1]); void loadSummary(); }}>
+          <Button onClick={() => { void load(cursorStack[cursorStack.length - 1], cursorStack.length); void loadSummary(); }}>
             Làm mới
           </Button>
         </div>
