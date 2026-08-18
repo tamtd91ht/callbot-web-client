@@ -90,6 +90,16 @@ export interface ClientSession {
   variablePriority?: VariablePriority;
   dedupeConfig?: DedupeConfig;
   runtimeSessionId?: string | null;
+  /**
+   * Mốc thời gian của PHIÊN RUNTIME (engine cũ) — thứ DUY NHẤT dùng để tính tên index ES của
+   * session/record/báo cáo KH.
+   *
+   * ⚠️ KHÁC `createdTimeMs`/`startTimeMs` của ClientSession (Mongo): hai cái đó là mốc của bản ghi
+   * cấu hình phiên, còn cái này sinh ra lúc SUBMIT chạy. Neo cửa sổ báo cáo bằng mốc Mongo thì
+   * phiên tạo cuối tháng 12 mà chạy sang tháng 1 sẽ tra sai index → TRẢ RỖNG, không lỗi, không log.
+   * null = phiên chưa từng submit nên chưa có dòng báo cáo nào.
+   */
+  runtimeSessionTimeMs?: number | null;
   counters?: SessionCounters;
   pausedCause?: string | null;
   cancelCause?: string | null;
@@ -467,10 +477,23 @@ export type CustomerReportSortField =
   | 'totalAnswered' | 'totalBillSec' | 'totalAnswerSec';
 
 export interface CustomerReportQuery {
-  /** BẮT BUỘC — BE chọn index theo NĂM từ khoảng này; thiếu là ném lỗi. */
-  fromMs: number;
-  toMs: number;
-  sessionIds?: string[];
+  /**
+   * BẮT BUỘC — phiên cần xem (runtimeSessionId với phiên luồng mới). Báo cáo này CHỈ dùng cho
+   * MỘT phiên, nên BE luôn đặt được routing = sessionId.
+   */
+  sessionId: string;
+  /**
+   * BẮT BUỘC — mốc của PHIÊN. BE suy tên index ES từ chính giá trị này, nên sai mốc là tra sai
+   * index và trả rỗng. Client luôn biết vì màn báo cáo nằm trong phiên.
+   */
+  sessionTimeMs: number;
+  /**
+   * Lọc THỜI ĐIỂM GỌI (tuỳ chọn) — trên `lastCallTimeMs`. KHÔNG liên quan việc chọn index.
+   * ⚠️ Khách gọi nhiều lần chỉ có 1 dòng: lọc theo lần gọi CUỐI, nên khách gọi lần đầu ngoài
+   * khoảng mà gọi lại trong khoảng thì vẫn hiện.
+   */
+  fromMs?: number;
+  toMs?: number;
   bestStatuses?: string[];
   /** true = chỉ KH đã khớp danh bạ · false = chỉ số lạ · undefined = tất cả. */
   hasContact?: boolean;

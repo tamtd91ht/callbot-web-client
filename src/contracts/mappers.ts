@@ -38,6 +38,7 @@ export interface BeClientSession {
   variableOrder?: string[];
   dedupeConfig?: DedupeConfig;
   runtimeSessionId?: string | null;
+  runtimeSessionTimeMs?: number | null;
   counters?: Partial<SessionCounters>;
   cancelCause?: string | null;
   pausedCause?: string | null;
@@ -227,6 +228,7 @@ export function mapClientSession(dto: BeClientSession): ClientSession {
     variableOrder: dto.variableOrder,
     dedupeConfig: dto.dedupeConfig,
     runtimeSessionId: dto.runtimeSessionId ?? null,
+    runtimeSessionTimeMs: dto.runtimeSessionTimeMs ?? null,
     counters,
     pausedCause: dto.pausedCause ?? null,
     cancelCause: dto.cancelCause ?? null,

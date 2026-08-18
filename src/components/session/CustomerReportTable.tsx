@@ -31,10 +31,6 @@ import { CustomerReportDetailDrawer } from './CustomerReportDetailDrawer';
 
 const PAGE_SIZE = 20;
 
-/** Cửa sổ thời gian quanh mốc phiên — BE bắt buộc fromMs/toMs để chọn index theo NĂM. */
-const WINDOW_BEFORE_MS = 24 * 60 * 60 * 1000;        // 1 ngày trước mốc phiên
-const WINDOW_AFTER_MS = 400 * 24 * 60 * 60 * 1000;   // phiên dài ngày vẫn nằm trong cửa sổ
-
 /** Ngưỡng TAT mặc định (ngày lịch). BE cũng mặc định 3 và kẹp về [1, 365]. */
 const DEFAULT_TAT_DAYS = 3;
 const MAX_TAT_DAYS = 365;
@@ -96,30 +92,44 @@ export function CustomerReportTable({
   const [tatDays, setTatDays] = useState(DEFAULT_TAT_DAYS);
 
   // Phiên luồng cũ mang id ghép "sessionId~sessionTimeMs" — tách ra lấy đúng 2 tham số BE cần.
-  const { sessionId, sessionTimeMs } = useMemo(() => parseCompositeId(session.id), [session.id]);
+  const legacy = useMemo(() => parseCompositeId(session.id), [session.id]);
 
   /**
-   * Mốc neo cửa sổ thời gian: ưu tiên sessionTimeMs của id ghép (luồng cũ), sau đó tới
-   * startTimeMs/createdTimeMs (luồng mới). KHÔNG lấy Date.now() làm mốc — phiên chạy từ năm
-   * trước sẽ rơi ra ngoài index năm nay và trả rỗng mà không có lỗi nào.
+   * ⚠️ Báo cáo KH khoá theo PHIÊN RUNTIME, không phải theo ClientSession trên Mongo.
+   *
+   * Dòng gom lưu `sessionId` = runtimeSessionId và `sessionTimeMs` = runtimeSessionTimeMs (mốc sinh
+   * lúc SUBMIT). Trước đây chỗ này gửi `session.id` (id Mongo) và neo cửa sổ bằng
+   * startTimeMs/createdTimeMs của ClientSession — CẢ HAI đều sai với phiên luồng mới, nên bảng
+   * TRẢ RỖNG mà không một dòng lỗi (và hai ô TAT trắng theo).
+   *
+   * Luồng cũ không có runtime* (chính nó là phiên runtime) nên rơi về id ghép.
    */
-  const anchorMs = sessionTimeMs || session.startTimeMs || session.createdTimeMs || 0;
+  const sessionId = session.runtimeSessionId || legacy.sessionId;
+  const sessionTimeMs = session.runtimeSessionTimeMs || legacy.sessionTimeMs;
+
+  /**
+   * Mốc neo cửa sổ thời gian = mốc PHIÊN RUNTIME, vì BE chọn index ES từ chính giá trị này
+   * (ElasticIndexManagement: session/record/customer-report đều neo vào sessionTimeMs).
+   * KHÔNG lấy Date.now() và KHÔNG lấy mốc Mongo — phiên chạy vắt qua giao năm sẽ tra sai index
+   * rồi trả rỗng mà không có lỗi nào.
+   */
+  const anchorMs = sessionTimeMs || 0;
 
   const load = useCallback(async (cursor: string[] | null, pageNumber = 1) => {
-    // Không có mốc thì cửa sổ rơi về 1970 → BE quét index năm 1970 → TRẢ RỖNG, KHÔNG LỖI,
-    // KHÔNG LOG, nhìn y hệt "phiên chưa gọi ai". Thà báo thẳng còn hơn để đọc nhầm số liệu.
+    // Thiếu mốc phiên = BE không suy được tên index (mốc 0 → index năm 1970) → TRẢ RỖNG, KHÔNG
+    // LỖI, KHÔNG LOG, nhìn y hệt "phiên chưa gọi ai". Chặn tại đây và báo thẳng.
+    // Phiên chưa submit thì runtimeSessionTimeMs còn null — đó là trường hợp bình thường.
     if (!anchorMs) {
       setRows([]); setTotal(0); setNextCursor(null);
-      setError('Phiên không có mốc thời gian nên không xác định được khoảng tra báo cáo.');
+      setError('Phiên chưa chạy nên chưa có báo cáo khách hàng.');
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
       const result = await sessionApi.customerReport({
-        fromMs: anchorMs - WINDOW_BEFORE_MS,
-        toMs: anchorMs + WINDOW_AFTER_MS,
-        sessionIds: [sessionId],
+        sessionId,
+        sessionTimeMs: anchorMs,
         bestStatuses: status === 'ALL' ? undefined : [status],
         hasContact: contactFilter === 'ALL' ? undefined : contactFilter === 'HAS',
         keyword: appliedKeyword || undefined,
@@ -157,9 +167,8 @@ export function CustomerReportTable({
     if (!anchorMs) { setSummary(null); return; }
     try {
       setSummary(await sessionApi.customerReportSummary({
-        fromMs: anchorMs - WINDOW_BEFORE_MS,
-        toMs: anchorMs + WINDOW_AFTER_MS,
-        sessionIds: [sessionId],
+        sessionId,
+        sessionTimeMs: anchorMs,
         bestStatuses: status === 'ALL' ? undefined : [status],
         hasContact: contactFilter === 'ALL' ? undefined : contactFilter === 'HAS',
         keyword: appliedKeyword || undefined,
