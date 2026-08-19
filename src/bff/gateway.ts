@@ -27,7 +27,8 @@ export interface CallbotGateway {
   /** PATCH config — nhóm core chỉ khi DRAFT (docs 01 §5). */
   updateSession(id: string, patch: UpdateSessionRequest): Promise<ClientSession>;
   /** `cause` chỉ dùng cho pause/cancel — BE lưu vào pausedCause/cancelCause. */
-  doAction(id: string, action: SessionAction, cause?: string): Promise<ClientSession>;
+  /** pauseMinutes chỉ dùng cho pause; bỏ trống = dừng vô thời hạn (mặc định). */
+  doAction(id: string, action: SessionAction, cause?: string, pauseMinutes?: number): Promise<ClientSession>;
   addManualRows(id: string, req: ManualRowsRequest): Promise<{ inserted: number; duplicated: number; invalid: number; rows: DataRow[] }>;
   searchRows(id: string, statuses?: string[]): Promise<DataRow[]>;
   /** Xoá rows (chỉ STAGED/DUPLICATE/INVALID → REMOVED). */

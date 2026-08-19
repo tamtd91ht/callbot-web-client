@@ -12,6 +12,8 @@ export interface MockSessionState {
   importBatches?: ImportBatch[];
   /** timer id của tick dispatcher mô phỏng — null khi không chạy */
   timer: ReturnType<typeof setInterval> | null;
+  /** Hẹn giờ tự chạy lại khi "tạm dừng có thời hạn" — mô phỏng tick AUTO_RESUME của BE. */
+  autoResumeTimer?: ReturnType<typeof setTimeout>;
   listeners: Set<(e: SessionEvent) => void>;
   seq: number;
 }
