@@ -39,6 +39,9 @@ import { scriptLabel } from '@/components/session/CatalogFields';
 
 type SessionTab = 'history' | 'data' | 'customers';
 
+/** Số dòng mỗi lần tải bảng data. Nhỏ để trang mở nhanh; muốn xem thêm thì bấm 'Tải thêm'. */
+const ROWS_PAGE_SIZE = 200;
+
 export default function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -53,19 +56,66 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
+  /**
+   * Bộ lọc bảng data — ĐẶT Ở ĐÂY chứ không trong bảng, vì lọc nay chạy trên BE nên "bộ lọc hiện tại"
+   * và "cursor" phải cùng một chủ sở hữu. Tách hai nơi là đổi filter mà cursor còn trỏ trang cũ.
+   */
+  const [dataFilter, setDataFilter] = useState<{ statusTab: string; source: string; search: string }>(
+    { statusTab: 'ALL', source: 'ALL', search: '' });
+  /** Cursor trang kế của bảng data; null = đã tải hết (gap BE #3 đã mở, xem searchRowsPage). */
+  const [rowsCursor, setRowsCursor] = useState<unknown[] | null>(null);
+  const [rowsTotal, setRowsTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [tab, setTab] = useState<SessionTab>('history');
   const catalogs = useCatalogs();
+
+  /** Chuyển bộ lọc UI thành tham số query của BE — một chỗ duy nhất để hai đường (reload/loadMore) khớp nhau. */
+  const dataQuery = useCallback(() => ({
+    // Tab "Đang/đã gọi" gộp QUEUED + DISPATCHED; các tab khác ánh xạ 1-1.
+    rowStatuses: dataFilter.statusTab === 'ALL' ? undefined
+      : dataFilter.statusTab === 'DISPATCHED' ? ['QUEUED', 'DISPATCHED'] : [dataFilter.statusTab],
+    sources: dataFilter.source === 'ALL' ? undefined : [dataFilter.source],
+    keyword: dataFilter.search.trim() || undefined,
+    excludeRemoved: true, // bảng không bao giờ hiện dòng đã xoá
+  }), [dataFilter]);
 
   const reload = useCallback(async () => {
     try {
       setSession(await sessionApi.getById(id));
-      setRows(await sessionApi.searchRows(id));
+      const first = await sessionApi.searchRowsPage(id, { size: ROWS_PAGE_SIZE, ...dataQuery() });
+      setRows(first.rows);
+      setRowsCursor(first.nextSearchAfter ?? null);
+      setRowsTotal(first.total);
       setDataVersion((v) => v + 1); // báo ReportPanel / lịch sử gọi tải lại số liệu
       setError(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
     }
-  }, [id]);
+  }, [id, dataQuery]);
+
+  /**
+   * Tải thêm một trang data.
+   *
+   * Cursor-only (search_after) nên chỉ đi TIẾN tuần tự — ES chặn from/size sâu ở 10.000 doc nên
+   * nhảy tới trang bất kỳ sẽ hỏng đúng lúc phiên nhiều dữ liệu. Vì vậy UI là "Tải thêm", không
+   * phải ô nhập số trang.
+   */
+  const loadMoreRows = useCallback(async () => {
+    if (!rowsCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const next = await sessionApi.searchRowsPage(id,
+        { size: ROWS_PAGE_SIZE, searchAfter: rowsCursor, ...dataQuery() });
+      // Nối thêm, KHÔNG thay thế — người dùng vừa cuộn qua các dòng trước đó.
+      setRows((prev) => [...prev, ...next.rows]);
+      setRowsCursor(next.nextSearchAfter ?? null);
+      setRowsTotal(next.total);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [id, rowsCursor, loadingMore, dataQuery]);
 
   useEffect(() => { void reload(); }, [reload]);
 
@@ -93,11 +143,12 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   const runAction = useCallback(async (
     action: 'submit' | 'pause' | 'resume' | 'cancel',
     cause?: string,
+    pauseMinutes?: number | null,
   ) => {
     setBusy(true);
     setError(null);
     try {
-      setSession(await sessionApi.action(id, action, cause));
+      setSession(await sessionApi.action(id, action, cause, pauseMinutes));
       setConfirmAction(null);
       await reload();
     } catch (e) {
@@ -139,7 +190,14 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
                 <span className={`badge ${session.status} align-middle`}>{session.status}</span>
                 {isRunning && <Spinner />}
               </h1>
-              {session.pausedCause && <div className="text-xs text-amber-700">Tạm dừng: {session.pausedCause}</div>}
+              {session.pausedCause && (
+                <div className="text-xs text-amber-700">
+                  Tạm dừng: {session.pausedCause}
+                  {session.pauseUntilTimeMs
+                    ? ` — tự chạy lại lúc ${new Date(session.pauseUntilTimeMs).toLocaleString('vi-VN')}`
+                    : ' — chờ bạn bấm Tiếp tục'}
+                </div>
+              )}
               {session.cancelCause && <div className="text-xs text-red-700">Đã huỷ: {session.cancelCause}</div>}
             </div>
           </div>
@@ -248,6 +306,13 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             <SessionDataTable
               rows={rows}
               scriptName={scriptName}
+              totalRows={c.total ?? rowsTotal}
+              counters={session.counters ?? undefined}
+              filter={dataFilter}
+              onFilterChange={(next) => setDataFilter(next)}
+              hasMore={rowsCursor != null}
+              loadingMore={loadingMore}
+              onLoadMore={loadMoreRows}
               onDelete={canAddData ? async (rowIds) => {
                 await sessionApi.removeRows(id, rowIds);
                 await reload();
@@ -268,7 +333,7 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
       <SessionActionDialog open={confirmAction !== null} action={confirmAction}
         sessionName={session.name} remaining={c.remaining ?? 0} busy={busy}
         onClose={() => setConfirmAction(null)}
-        onConfirm={(cause) => void runAction(confirmAction!, cause)} />
+        onConfirm={(cause, pauseMinutes) => void runAction(confirmAction!, cause, pauseMinutes)} />
 
       <CloneSessionDialog open={cloneOpen} session={session} busy={busy}
         onClose={() => setCloneOpen(false)}

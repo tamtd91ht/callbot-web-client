@@ -14,7 +14,7 @@ import type {
   CloneSessionResult, ContactSuggestion, CreateSessionRequest, CrmContactFilter,
   CustomerReportDetail, CustomerReportPage, CustomerReportPageRaw, CustomerReportQuery,
   CustomerReportSummary, CustomerReportTatBucket, CustomerReportTatSummary, DataRow,
-  ImportBatch, ImportExcelResult, LegacySessionFilter, LegacySessionReport,
+  DataRowPage, ImportBatch, ImportExcelResult, LegacySessionFilter, LegacySessionReport,
   Paginated, SessionReport, UpdateSessionRequest,
 } from '@/contracts/types';
 import {
@@ -28,6 +28,17 @@ import { ApiError, api, get, post, patch, del } from './apiClient';
 import { getToken } from './token';
 
 export const IS_REAL = process.env.NEXT_PUBLIC_CALLBOT_MODE === 'real';
+
+/**
+ * Trần số dòng tải về cho bảng "Data đã nạp".
+ *
+ * ⚠️ KHÔNG phải lựa chọn thiết kế: endpoint /client-session/data/search hiện KHÔNG phân trang được
+ * (ClientDataFilter có searchAfter nhưng controller không đọc từ body — xem backend-gaps mục 3).
+ * Vì vậy FE xin một lô rồi phân trang phía client. Phiên đông hơn số này thì bảng KHÔNG hiển thị
+ * hết — bắt buộc phải báo cho người dùng biết, nếu không họ thấy "Data đã nạp (200)" cạnh counter
+ * realtime ghi 100.000 và kết luận là mất data.
+ */
+export const ROW_FETCH_LIMIT = 200;
 
 /** Base URL phải là biến NEXT_PUBLIC_* vì trình duyệt cần đọc được. */
 export function apiBaseUrl(): string {
@@ -213,14 +224,22 @@ export const sessionApi = {
 
   /**
    * `cause` chỉ có nghĩa với pause/cancel (BE đọc key `cause`); submit/resume bỏ qua.
-   * BE KHÔNG hỗ trợ pause kèm thời lượng như AutoCall (pauseUntilTime) — xem mục nợ BE.
+   * `pauseMinutes` chỉ có nghĩa với pause: bỏ trống = dừng vô thời hạn (mặc định — khác AutoCall,
+   * xem javadoc ClientSessionControlService.pause). Có giá trị = BE đặt tick tự chạy lại.
    */
   async action(
     id: string,
     action: 'submit' | 'pause' | 'resume' | 'cancel',
     cause?: string,
+    pauseMinutes?: number | null,
   ): Promise<ClientSession> {
-    if (!IS_REAL) return post<ClientSession>(`/api/client-session/${id}/${action}`, cause ? { cause } : undefined);
+    if (!IS_REAL) {
+      const mockBody: Record<string, unknown> = {};
+      if (cause) mockBody.cause = cause;
+      if (action === 'pause' && pauseMinutes) mockBody.pauseMinutes = pauseMinutes;
+      return post<ClientSession>(`/api/client-session/${id}/${action}`,
+        Object.keys(mockBody).length ? mockBody : undefined);
+    }
     if (isLegacyId(id)) {
       if (action === 'submit') throw new ApiError('CS_INVALID_STATE', 'Phiên luồng cũ không có bước submit');
       const { sessionId, sessionTimeMs } = parseCompositeId(id);
@@ -230,7 +249,67 @@ export const sessionApi = {
     }
     const body: Record<string, unknown> = { id };
     if (cause && (action === 'pause' || action === 'cancel')) body.cause = cause;
+    if (action === 'pause' && pauseMinutes) body.pauseMinutes = pauseMinutes;
     return mapClientSession(await cs<BeClientSession>(`/${action}`, body));
+  },
+
+  /**
+   * Một trang data theo cursor — đường CHÍNH để xem data của phiên.
+   *
+   * [Gap BE #3 — đã sửa 2026-08-19] Trước đây `/data/search` bỏ qua `searchAfter` nên FE buộc phải
+   * xin một lô 200 dòng rồi phân trang phía client: phiên quá 200 dòng là không xem hết được, mà
+   * phiên gộp data hàng ngày thì vượt 200 sau vài ngày. Nay BE đọc cursor từ body.
+   *
+   * ⚠️ Cursor-only: chỉ đi tiến tuần tự, không nhảy tới trang bất kỳ (ES chặn from/size sâu).
+   */
+  async searchRowsPage(
+    id: string,
+    opts: {
+      size?: number; searchAfter?: unknown[] | null;
+      rowStatuses?: string[]; sources?: string[]; keyword?: string;
+      /** Ẩn dòng đã xoá — bảng data luôn bật; BE mặc định TRẢ CẢ dòng REMOVED. */
+      excludeRemoved?: boolean;
+    } = {},
+  ): Promise<DataRowPage> {
+    const size = opts.size ?? 50;
+    if (!IS_REAL) {
+      const rows = await get<DataRow[]>(`/api/client-session/${id}/data`);
+      // Mock giữ toàn bộ trong bộ nhớ nên cắt trang tại chỗ, vẫn trả đúng hình dạng cursor để UI
+      // chạy CÙNG một đường code với real mode (nếu không, lỗi phân trang chỉ lộ ra ở prod).
+      const from = typeof opts.searchAfter?.[0] === 'number' ? (opts.searchAfter[0] as number) : 0;
+      // Mock lọc TẠI CHỖ theo đúng thứ tự BE làm — nếu lệch thì lỗi lọc chỉ lộ ra ở prod.
+      let filtered = opts.excludeRemoved ? rows.filter((r) => r.rowStatus !== 'REMOVED') : rows;
+      if (opts.rowStatuses?.length) filtered = filtered.filter((r) => opts.rowStatuses!.includes(r.rowStatus));
+      if (opts.sources?.length) filtered = filtered.filter((r) => r.source && opts.sources!.includes(r.source));
+      if (opts.keyword) {
+        const kw = opts.keyword.trim().toLowerCase();
+        // Khớp BE: SĐT CHỨA chuỗi, hoặc tên bắt đầu bằng chuỗi (matchPhrasePrefix trên field keyword).
+        filtered = filtered.filter((r) => r.phoneNumber.includes(kw)
+          || (r.variables?.full_name ?? '').toLowerCase().startsWith(kw));
+      }
+      const slice = filtered.slice(from, from + size);
+      const next = from + size < filtered.length ? [from + size] : null;
+      return { rows: slice, total: filtered.length, nextSearchAfter: next };
+    }
+    if (isLegacyId(id)) {
+      const { sessionId } = parseCompositeId(id);
+      const page = await beCall<OldPaginated<OldRecordDTO>>('/record/search', {
+        filter: { sessionIds: [sessionId] }, page: 1, size,
+      });
+      return { rows: (page.items ?? []).map((r) => mapOldRecord(r, id)), total: page.totalItems ?? 0, nextSearchAfter: null };
+    }
+    const body: Record<string, unknown> = { id, size };
+    if (opts.searchAfter?.length) body.searchAfter = opts.searchAfter;
+    if (opts.rowStatuses?.length) body.rowStatuses = opts.rowStatuses;
+    if (opts.sources?.length) body.sources = opts.sources;
+    if (opts.keyword) body.keyword = opts.keyword;
+    if (opts.excludeRemoved) body.excludeRemoved = true;
+    const page = await cs<BeDataPage>('/data/search', body);
+    return {
+      rows: (page.rows ?? []).map((r) => mapClientRow(r, id)),
+      total: page.total ?? 0,
+      nextSearchAfter: page.nextSearchAfter ?? null,
+    };
   },
 
   async searchRows(id: string): Promise<DataRow[]> {
@@ -238,11 +317,11 @@ export const sessionApi = {
     if (isLegacyId(id)) {
       const { sessionId } = parseCompositeId(id);
       const page = await beCall<OldPaginated<OldRecordDTO>>('/record/search', {
-        filter: { sessionIds: [sessionId] }, page: 1, size: 200,
+        filter: { sessionIds: [sessionId] }, page: 1, size: ROW_FETCH_LIMIT,
       });
       return (page.items ?? []).map((r) => mapOldRecord(r, id));
     }
-    const page = await cs<BeDataPage>('/data/search', { id, size: 200 });
+    const page = await cs<BeDataPage>('/data/search', { id, size: ROW_FETCH_LIMIT });
     return (page.rows ?? []).map((r) => mapClientRow(r, id));
   },
 
@@ -302,7 +381,9 @@ export const sessionApi = {
   async listJobs(id: string): Promise<ImportBatch[]> {
     if (!IS_REAL) return get<ImportBatch[]>(`/api/client-session/${id}/jobs`);
     if (isLegacyId(id)) return []; // phiên luồng cũ không có khái niệm job nền
-    const list = await cs<BeImportBatch[]>('/import-batch/search', { id, size: 10 });
+    // withCallProgress: xin kèm tiến độ GỌI của từng đợt — "đợt tôi vừa nạp gọi xong chưa?".
+    // Mặc định BE tắt (mỗi đợt tốn 1 aggregation ES) nên phải hỏi tường minh.
+    const list = await cs<BeImportBatch[]>('/import-batch/search', { id, size: 10, withCallProgress: true });
     return (list ?? []).map(mapImportBatch);
   },
 

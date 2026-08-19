@@ -104,6 +104,8 @@ export function computeCounters(state: MockSessionState): SessionCounters {
   const by = (f: (r: (typeof state.rows)[number]) => boolean) => state.rows.filter(f).length;
   const staged = by((r) => r.rowStatus === 'STAGED');
   const queued = by((r) => r.rowStatus === 'QUEUED');
+  // Gộp DISPATCHED+DONE cho ô "Đang/đã gọi" ở khối số liệu; nhưng tab data cần TÁCH hai trạng
+  // thái nên phải trả riêng `done` — khớp BE (aggregateByStatus đếm theo từng rowStatus).
   const dispatched = by((r) => r.rowStatus === 'DISPATCHED' || r.rowStatus === 'DONE');
   return {
     total: state.rows.length,
@@ -112,6 +114,7 @@ export function computeCounters(state: MockSessionState): SessionCounters {
     invalid: by((r) => r.rowStatus === 'INVALID'),
     queued,
     dispatched,
+    done: by((r) => r.rowStatus === 'DONE'),
     remaining: staged + queued,
     answered: by((r) => r.callResult === 'ANSWERED'),
     noAnswer: by((r) => r.callResult === 'NO_ANSWER'),

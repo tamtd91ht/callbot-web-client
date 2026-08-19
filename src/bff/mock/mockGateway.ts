@@ -90,6 +90,32 @@ function finishedBatch(
   return batch;
 }
 
+/** Lưu lại đợt nạp tay/Excel với ĐÚNG batchId đã gán cho rows (finishedBatch tự sinh id mới). */
+function recordManualBatch(
+  id: string,
+  batchId: string,
+  source: ClientDataSource,
+  totalRows: number,
+  result: { inserted: number; duplicated: number; invalid: number },
+): void {
+  const state = must(id);
+  const batch: ImportBatch = {
+    id: batchId,
+    clientSessionId: id,
+    type: 'IMPORT',
+    source,
+    status: 'DONE',
+    totalRows,
+    processedRows: totalRows,
+    inserted: result.inserted,
+    duplicated: result.duplicated,
+    invalid: result.invalid,
+    createdTimeMs: Date.now(),
+    finishedTimeMs: Date.now(),
+  };
+  state.importBatches = [batch, ...(state.importBatches ?? [])].slice(0, 10);
+}
+
 export const mockGateway: CallbotGateway = {
   async createSession(req: CreateSessionRequest): Promise<ClientSession> {
     if (!req.name?.trim()) throw new GatewayError('CS_INVALID_CONFIG', 'name is required');
@@ -157,7 +183,7 @@ export const mockGateway: CallbotGateway = {
     return { ...s, counters: computeCounters(state) };
   },
 
-  async doAction(id: string, action: SessionAction, cause?: string): Promise<ClientSession> {
+  async doAction(id: string, action: SessionAction, cause?: string, pauseMinutes?: number): Promise<ClientSession> {
     const state = must(id);
     const s = state.session;
     switch (action) {
@@ -198,7 +224,24 @@ export const mockGateway: CallbotGateway = {
         if (s.status !== 'RUNNING') throw new GatewayError('CS_INVALID_STATE', `Only RUNNING can be paused, current: ${s.status}`);
         s.status = 'PAUSED';
         s.pausedCause = cause?.trim() || 'User pause';
+        // Hẹn giờ là TUỲ CHỌN — không truyền thì dừng tới khi bấm Tiếp tục (mặc định).
+        s.pauseUntilTimeMs = pauseMinutes && pauseMinutes > 0
+          ? Date.now() + pauseMinutes * 60_000
+          : null;
         stopTicking(state);
+        if (s.pauseUntilTimeMs) {
+          // Mô phỏng tick AUTO_RESUME của BE. setTimeout đủ cho mock (BE dùng Rabbit x-delay).
+          state.autoResumeTimer = setTimeout(() => {
+            const cur = state.session;
+            if (cur.status === 'PAUSED' && cur.pauseUntilTimeMs) {
+              cur.status = 'RUNNING';
+              cur.pausedCause = null;
+              cur.pauseUntilTimeMs = null;
+              emitLifecycle(state, null);
+              startTicking(state);
+            }
+          }, pauseMinutes! * 60_000);
+        }
         emitLifecycle(state, s.pausedCause);
         break;
       }
@@ -206,6 +249,8 @@ export const mockGateway: CallbotGateway = {
         if (s.status !== 'PAUSED') throw new GatewayError('CS_INVALID_STATE', `Only PAUSED can be resumed, current: ${s.status}`);
         s.status = 'RUNNING';
         s.pausedCause = null;
+        s.pauseUntilTimeMs = null;   // resume tay huỷ luôn hẹn giờ — khớp BE
+        if (state.autoResumeTimer) { clearTimeout(state.autoResumeTimer); state.autoResumeTimer = undefined; }
         emitLifecycle(state, null);
         startTicking(state);
         break;
@@ -251,6 +296,9 @@ export const mockGateway: CallbotGateway = {
     const basePriority = req.appendMode === 'RUN_NOW' ? minPriority - 1_000_000 : Date.now();
 
     const created: DataRow[] = [];
+    // Mọi đợt nạp đều có batchId (khớp BE: ClientSessionController.dataManual sinh batchId cho cả
+    // nạp tay) — không có thì không truy được tiến độ gọi theo đợt.
+    const batchId = nextId('batch');
     let inserted = 0, duplicated = 0, invalid = 0;
     for (const [i, raw] of req.rows.entries()) {
       const phone = normalizePhone(raw.phoneNumber);
@@ -260,6 +308,7 @@ export const mockGateway: CallbotGateway = {
         phoneNumber: phone ?? raw.phoneNumber,
         variables: raw.variables,
         source: req.source ?? 'MANUAL',
+        importBatchId: batchId,
         rowStatus: 'STAGED',
         priority: basePriority + i,
         createdTimeMs: Date.now(),
@@ -281,6 +330,8 @@ export const mockGateway: CallbotGateway = {
       state.rows.push(row);
       created.push(row);
     }
+    recordManualBatch(id, batchId, req.source ?? 'MANUAL', req.rows.length,
+      { inserted, duplicated, invalid });
     emitStats(state);
     return { inserted, duplicated, invalid, rows: created };
   },
@@ -344,12 +395,37 @@ export const mockGateway: CallbotGateway = {
       phoneNumber: `09${String(30000000 + i).padStart(8, '0')}`,
       variables: { full_name: `Khách CRM ${i + 1}` },
     }));
-    const result = await mockGateway.addManualRows(id, { rows, source: 'CRM', appendMode });
-    return finishedBatch(id, 'IMPORT', 'CRM', rows.length, result);
+    // addManualRows đã tự tạo batch và gán importBatchId cho rows — KHÔNG gọi finishedBatch nữa,
+    // nếu không sẽ có 2 đợt trong danh sách mà đợt thứ hai không sở hữu dòng nào (tiến độ gọi rỗng).
+    await mockGateway.addManualRows(id, { rows, source: 'CRM', appendMode });
+    return (must(id).importBatches ?? [])[0];
   },
 
   async listImportBatches(id: string): Promise<ImportBatch[]> {
-    return must(id).importBatches ?? [];
+    const state = must(id);
+    // Tính tiến độ GỌI từ chính rows trong store — khớp aggregation theo importBatchId của BE.
+    return (state.importBatches ?? []).map((b) => {
+      if (b.type !== 'IMPORT') return b;
+      const rows = state.rows.filter((r) => r.importBatchId === b.id);
+      const by = (...st: string[]) => rows.filter((r) => st.includes(r.rowStatus)).length;
+      const waiting = by('STAGED');
+      const calling = by('QUEUED', 'DISPATCHED');
+      const done = by('DONE');
+      const duplicated = by('DUPLICATE');
+      const invalid = by('INVALID');
+      const total = waiting + calling + done + duplicated + invalid;
+      return {
+        ...b,
+        callProgress: {
+          importBatchId: b.id,
+          total, waiting, calling, done, duplicated, invalid,
+          removed: by('REMOVED'),
+          // Giống BE: đợt rỗng KHÔNG phải "xong"; DUPLICATE/INVALID không chặn "xong".
+          completed: total > 0 && waiting === 0 && calling === 0,
+          percent: total > 0 ? Math.min(100, Math.floor(((done + duplicated + invalid) * 100) / total)) : 0,
+        },
+      };
+    });
   },
 
   async recheckDedupe(id: string): Promise<ImportBatch> {
@@ -517,6 +593,7 @@ export const mockGateway: CallbotGateway = {
       submittedTimeMs: null,
       completedTimeMs: null,
       pausedCause: null,
+      pauseUntilTimeMs: null,
       cancelCause: null,
       counters: undefined,
       createdTimeMs: Date.now(),

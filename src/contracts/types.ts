@@ -54,6 +54,8 @@ export interface SessionCounters {
   invalid: number;
   queued: number;
   dispatched: number;
+  /** Dòng đã kết thúc vòng đời hàng đợi (rowStatus DONE) — KHÁC `answered` (kết quả gọi). */
+  done: number;
   remaining: number;
   answered: number;
   noAnswer: number;
@@ -102,6 +104,8 @@ export interface ClientSession {
   runtimeSessionTimeMs?: number | null;
   counters?: SessionCounters;
   pausedCause?: string | null;
+  /** Mốc tự chạy lại (epoch ms) khi tạm dừng CÓ hẹn giờ; null = dừng tới khi bấm Tiếp tục (mặc định). */
+  pauseUntilTimeMs?: number | null;
   cancelCause?: string | null;
   createdTimeMs: number;
   submittedTimeMs?: number | null;
@@ -120,6 +124,8 @@ export interface DataRow {
   phoneNumber: string;
   variables?: Record<string, string>;
   source: ClientDataSource;
+  /** Đợt nạp đã sinh ra dòng này — nền của tiến độ gọi theo đợt (FR-006). */
+  importBatchId?: string | null;
   rowStatus: ClientRowStatus;
   invalidReason?: string | null;
   priority: number;
@@ -127,6 +133,21 @@ export interface DataRow {
   /** Chỉ có ở mock/viewer: kết quả cuối của record (join phía BE) */
   callResult?: 'ANSWERED' | 'NO_ANSWER' | 'FAILED' | 'CANCELED' | null;
   createdTimeMs: number;
+}
+
+/**
+ * Một trang data của phiên (BE: ClientDataPage).
+ *
+ * Phân trang bằng CURSOR (`search_after`), không phải page number: một phiên có thể vài trăm nghìn
+ * dòng, mà ES chặn from/size sâu ở `index.max_result_window` (mặc định 10.000) — dùng page number
+ * sẽ hỏng đúng lúc dữ liệu nhiều. Vì vậy chỉ đi tiến/lùi tuần tự, KHÔNG nhảy tới trang bất kỳ.
+ */
+export interface DataRowPage {
+  rows: DataRow[];
+  /** Tổng số dòng khớp filter (BE trackTotalHits) — dùng cho "đang xem x/y". */
+  total: number;
+  /** Cursor cho trang kế; null/rỗng = hết dữ liệu. */
+  nextSearchAfter?: unknown[] | null;
 }
 
 // ===== Requests (mirror 05 §1.1) =====
@@ -208,6 +229,32 @@ export interface ImportBatch {
   failReason?: string | null;
   createdTimeMs?: number;
   finishedTimeMs?: number | null;
+  /**
+   * Tiến độ GỌI của đợt — chỉ có khi hỏi kèm `withCallProgress`, và chỉ với đợt type IMPORT.
+   *
+   * ⚠️ Đừng nhầm với `processedRows/inserted`: những field đó là tiến độ NẠP (ghi dòng vào hàng
+   * đợi), xong từ lâu trước khi cuộc gọi đầu tiên diễn ra. Người dùng hỏi "đợt này xong chưa" là
+   * hỏi tiến độ GỌI — chính là field này.
+   */
+  callProgress?: BatchCallProgress | null;
+}
+
+/** Tiến độ GỌI của một đợt nạp (BE: BatchCallProgress). */
+export interface BatchCallProgress {
+  importBatchId?: string;
+  /** Tổng dòng còn sống của đợt (không tính dòng đã xoá). */
+  total: number;
+  /** Chưa gọi. */
+  waiting: number;
+  /** Đang trong pipeline gọi. */
+  calling: number;
+  done: number;
+  duplicated: number;
+  invalid: number;
+  removed: number;
+  /** Hết chờ gọi VÀ hết đang gọi. Đợt rỗng KHÔNG phải "xong". */
+  completed: boolean;
+  percent: number;
 }
 
 /** Filter danh bạ CRM khi nạp data nguồn CRM (B6). */

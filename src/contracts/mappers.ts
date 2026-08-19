@@ -6,6 +6,7 @@
  * "CS_XXX: ..." trong message (BE không có field errorCode riêng — convention B8).
  */
 import type {
+  BatchCallProgress,
   CallbotScript, CallRecord, ClientDataSource, ClientRowStatus, ClientSession, ClientSessionStatus,
   ContactSuggestion, CreateSessionRequest, DataRow, DedupeConfig, ImportBatch, RecordStatus,
   RetryConfig, ScriptVariable, SessionCounters, SipNumber, TimeSlot, UpdateSessionRequest,
@@ -42,6 +43,7 @@ export interface BeClientSession {
   counters?: Partial<SessionCounters>;
   cancelCause?: string | null;
   pausedCause?: string | null;
+  pauseUntilTimeMs?: number | null;
   createdTimeMs?: number;
   submittedTimeMs?: number | null;
   completedTimeMs?: number | null;
@@ -90,6 +92,8 @@ export interface BeImportBatch {
   failReason?: string | null;
   createdTimeMs?: number;
   finishedTimeMs?: number | null;
+  /** BE @JsonUnwrapped → nằm phẳng cùng cấp; chỉ có với đợt IMPORT khi hỏi withCallProgress. */
+  callProgress?: BatchCallProgress | null;
 }
 
 /* ===================== Shapes BE — luồng CŨ (read-only) ===================== */
@@ -198,6 +202,7 @@ export function mapClientSession(dto: BeClientSession): ClientSession {
     invalid: c.invalid ?? 0,
     queued: c.queued ?? 0,
     dispatched: c.dispatched ?? 0,
+    done: c.done ?? 0,
     remaining: Math.max(0, total - finished),
     answered: c.answered ?? 0,
     noAnswer: c.noAnswer ?? 0,
@@ -231,6 +236,7 @@ export function mapClientSession(dto: BeClientSession): ClientSession {
     runtimeSessionTimeMs: dto.runtimeSessionTimeMs ?? null,
     counters,
     pausedCause: dto.pausedCause ?? null,
+    pauseUntilTimeMs: dto.pauseUntilTimeMs ?? null,
     cancelCause: dto.cancelCause ?? null,
     createdTimeMs: dto.createdTimeMs ?? 0,
     submittedTimeMs: dto.submittedTimeMs ?? null,
@@ -273,6 +279,8 @@ export function mapImportBatch(dto: BeImportBatch): ImportBatch {
     failReason: dto.failReason ?? null,
     createdTimeMs: dto.createdTimeMs,
     finishedTimeMs: dto.finishedTimeMs ?? null,
+    // BE dùng @JsonUnwrapped nên callProgress nằm PHẲNG cùng cấp với các field khác của batch.
+    callProgress: dto.callProgress ?? null,
   };
 }
 
@@ -313,6 +321,7 @@ export function mapOldSession(dto: OldSessionDTO): ClientSession {
       total,
       staged: 0, duplicated: 0, invalid: 0, queued: 0, // khái niệm staging chỉ có ở luồng client mới
       dispatched: total,
+      done: finished, // luồng cũ không có rowStatus — coi cuộc đã kết thúc là done
       remaining: Math.max(0, total - finished),
       answered: rd.answered ?? 0,
       noAnswer: rd.noAnswer ?? 0,
