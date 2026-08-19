@@ -5,7 +5,7 @@
  * Mock mode job xong ngay nên chỉ hiện lịch sử.
  */
 import { useCallback, useEffect, useState } from 'react';
-import type { ImportBatch } from '@/contracts/types';
+import type { BatchCallProgress, ImportBatch } from '@/contracts/types';
 import { ApiError } from '@/lib/apiClient';
 import { sessionApi } from '@/lib/sessionApi';
 import { Button } from '../ui';
@@ -39,13 +39,17 @@ export function JobsPanel({
   useEffect(() => { void reload(); }, [reload]);
 
   const running = batches.some((b) => b.status === 'RECEIVED' || b.status === 'PROCESSING');
+  // Đợt đã nạp xong nhưng CHƯA gọi xong thì vẫn phải poll: tiến độ gọi còn chạy tiếp rất lâu sau
+  // khi import kết thúc. Chỉ dừng poll khi mọi đợt đều nạp xong VÀ gọi xong.
+  const callInProgress = batches.some((b) => b.callProgress && !b.callProgress.completed && b.callProgress.total > 0);
+  const shouldPoll = running || callInProgress;
   useEffect(() => {
-    if (!running) return;
+    if (!shouldPoll) return;
     const timer = setInterval(() => {
       void reload().then(() => onFinished?.());
     }, 3000);
     return () => clearInterval(timer);
-  }, [running, reload, onFinished]);
+  }, [shouldPoll, reload, onFinished]);
 
   async function trigger(action: 'recheck' | 'export') {
     setBusy(true); setError(null);
@@ -62,7 +66,9 @@ export function JobsPanel({
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h3 className="text-[15px] font-bold">Xử lý nền</h3>
         <span className="text-xs text-(--color-muted)">
-          {running ? 'đang chạy — tự cập nhật mỗi 3 giây' : 'không có việc nào đang chạy'}
+          {running ? 'đang chạy — tự cập nhật mỗi 3 giây'
+            : callInProgress ? 'đang gọi — tự cập nhật mỗi 3 giây'
+            : 'không có việc nào đang chạy'}
         </span>
         <span className="ml-auto flex items-center gap-2">
           {isDraft && (
@@ -135,6 +141,8 @@ function JobRow({ batch }: { batch: ImportBatch }) {
         </div>
       )}
 
+      {batch.callProgress && <CallProgressBlock progress={batch.callProgress} />}
+
       {batch.status === 'DONE' && isExport && (
         <div className="mt-1 text-xs text-(--color-muted)">
           {(batch.totalRows ?? 0).toLocaleString('vi-VN')} dòng
@@ -152,6 +160,44 @@ function JobRow({ batch }: { batch: ImportBatch }) {
       {failed && batch.failReason && (
         <div className="mt-1 text-xs text-(--color-danger)">{batch.failReason}</div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Tiến độ GỌI của đợt — trả lời "đợt tôi vừa nạp gọi tới đâu rồi?".
+ *
+ * ⚠️ Khối này CỐ Ý tách khỏi thanh tiến độ nạp ở trên và có nhãn riêng, vì hai thứ rất dễ nhầm:
+ * "Nạp dữ liệu — Xong" chỉ nghĩa là đã ghi đủ dòng vào hàng đợi, chưa gọi ai cả. Gộp chung một
+ * thanh là người dùng thấy 100% rồi tưởng chiến dịch đã chạy hết.
+ */
+function CallProgressBlock({ progress }: { progress: BatchCallProgress }) {
+  // Đợt rỗng: không có gì để nói, và tuyệt đối không được hiện "đã gọi xong".
+  if (progress.total <= 0) return null;
+
+  return (
+    <div className="mt-2 rounded-lg bg-(--color-field) px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-semibold">Tiến độ gọi của đợt này</span>
+        {progress.completed ? (
+          <span className="rounded-full bg-(--color-primary) px-2 py-0.5 text-white">Đã gọi xong</span>
+        ) : (
+          <span className="text-amber-700">
+            còn {(progress.waiting + progress.calling).toLocaleString('vi-VN')} khách chưa xong
+          </span>
+        )}
+        <span className="ml-auto text-(--color-muted)">{progress.percent}%</span>
+      </div>
+      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white">
+        <div className="h-full bg-(--color-primary) transition-[width]" style={{ width: `${progress.percent}%` }} />
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-3 text-xs text-(--color-muted)">
+        <span>Chưa gọi: <b className="text-(--color-ink)">{progress.waiting.toLocaleString('vi-VN')}</b></span>
+        <span>Đang gọi: <b className="text-(--color-ink)">{progress.calling.toLocaleString('vi-VN')}</b></span>
+        <span>Đã gọi: <b className="text-(--color-ink)">{progress.done.toLocaleString('vi-VN')}</b></span>
+        {progress.duplicated > 0 && <span>Trùng (bỏ qua): {progress.duplicated.toLocaleString('vi-VN')}</span>}
+        {progress.invalid > 0 && <span>Lỗi (bỏ qua): {progress.invalid.toLocaleString('vi-VN')}</span>}
+      </div>
     </div>
   );
 }
