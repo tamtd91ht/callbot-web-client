@@ -36,13 +36,34 @@ Quá 50 phiên là danh sách sai.
 
 ---
 
-## 3. `/client-session/data/search` không phân trang được
+## 3. `/client-session/data/search` không phân trang được — ✅ ĐÃ XONG 2026-08-19
 
 **Hiện trạng.** `ClientDataFilter` **có** `searchAfter`, `createdFromMs`, `createdToMs`, nhưng
 controller không đọc 3 field này từ body. Nên cursor pagination không chạm tới được qua HTTP:
 mọi lần gọi đều trả trang đầu.
 
-**FE đang lách.** Xin `size: 200` rồi phân trang phía client. Phiên trên 200 dòng là không xem hết được.
+**FE đang lách.** Xin `size: ROW_FETCH_LIMIT` (=200, hằng số có tên trong `sessionApi.ts`) rồi phân
+trang phía client. Phiên trên 200 dòng là không xem hết được.
+
+**Đã sửa 2026-08-19.** Hoá ra chỉ thiếu 3 dòng ở controller: `ClientDataFilter` và ES impl đã hỗ trợ
+cursor đầy đủ từ đầu, chỉ `dataSearch` không đọc `searchAfter`/`createdFromMs`/`createdToMs` từ body.
+Nay đọc rồi, kèm trần `size` 500. FE dùng `sessionApi.searchRowsPage()` + nút **Tải thêm**.
+
+⚠️ **Cursor-only, không có ô nhập số trang** — cố ý: ES chặn from/size sâu ở `max_result_window`
+(10.000) nên page number sẽ hỏng đúng lúc phiên nhiều dữ liệu (xem mục 20).
+
+**Đếm theo tab: đã xong 2026-08-19.** `Counters` thêm field `done` (aggregation vốn đã đếm, chỉ chưa
+giữ lại) → tab lấy số TOÀN PHIÊN từ counters realtime thay vì đếm trên tập đã tải. Khi số tab lệch số
+dòng đang liệt kê, UI nói rõ ra thay vì để người dùng tự đoán.
+
+**Lọc nguồn + tìm kiếm: đã xong 2026-08-19.** FE đẩy `sources`/`keyword` xuống BE, kèm cờ
+`excludeRemoved` mới (không có nó thì dòng đã xoá hiện lại khi lọc chuyển xuống server). Ô tìm kiếm
+debounce 400ms — mỗi phím một query ES trên cluster dùng chung là quá tốn.
+
+⚠️ Khi BE đã lọc thì FE **không lọc lại**: BE tìm tên theo prefix, client cũ dùng contains — lọc
+chồng sẽ ăn mất dòng hợp lệ.
+
+**Gap này đã đóng hoàn toàn** (phân trang cursor + đếm tab toàn phiên + lọc nguồn + tìm kiếm).
 
 **Cần BE.** Đọc `searchAfter` (và khoảng thời gian) từ body, trả `nextSearchAfter` như DTO đã có.
 
@@ -63,17 +84,35 @@ thiếu `gateway` để FE hướng dẫn chính xác.
 
 ---
 
-## 5. `pause` không nhận thời lượng
+## 4b. Không trả lời được "đợt nạp X gọi xong chưa?" — ✅ ĐÃ XONG 2026-08-19
 
-**Hiện trạng.** `POST /pause` chỉ đọc `{id, cause}`.
+**Trước đây.** Mọi số liệu đều gộp cả phiên. Người dùng nạp bổ sung rồi hỏi "đợt đó chạy tới đâu"
+thì không có gì để xem. ADR FR-005 (docs 11) có thiết kế nhưng phương án D chưa code.
 
-**Khác AutoCall.** AutoCall cho chọn tạm dừng 3 phút / 30 phút / 1–24 giờ (`pauseUntilTime`),
-hết hạn phiên **tự chạy lại**. CallBot không có → dừng là dừng tới khi bấm tay.
+**Nay.** `POST /import-batch/search` nhận `withCallProgress: true` → mỗi đợt IMPORT kèm
+`callProgress` (total/waiting/calling/done/duplicated/invalid/completed/percent). FE hiện khối
+"Tiến độ gọi của đợt này" trong `JobsPanel`.
 
-**FE đang lách.** Cho chọn **lý do** tạm dừng thay vì thời lượng, và nói thẳng trên dialog là
-"đứng yên cho tới khi bạn bấm Tiếp tục". Không hứa điều backend không làm được.
+⚠️ Đừng nhầm `callProgress` với `processedRows/inserted`: những field kia là tiến độ **NẠP**, xong
+từ lâu trước khi gọi. Đó là lý do UI để hai khối tách rời.
 
-**Cần BE.** Thêm `pauseUntilTime` (epoch ms) + scheduler tự resume, nếu muốn parity với AutoCall.
+⚠️ Redis counter của ADR docs 11 phương án D **vẫn cần** khi làm recall theo đợt — dispatcher check
+mỗi tick thì aggregation ES là quá đắt. Cái làm ở đây chỉ phục vụ câu hỏi của người dùng.
+
+---
+
+## 5. `pause` không nhận thời lượng — ✅ ĐÃ XONG 2026-08-19
+
+**Hiện trạng.** `POST /pause` nhận thêm `pauseMinutes` (**không bắt buộc**, trần 7 ngày).
+Bỏ trống = dừng vô thời hạn.
+
+**Khác AutoCall — CÓ CHỦ Ý, không phải thiếu tính năng.** AutoCall *bắt buộc* chọn thời lượng.
+Quyết định owner: ở đây "dừng chủ động thì cũng chủ động chạy lại" là **mặc định**; hẹn giờ chỉ là
+tuỳ chọn thêm. Vì vậy trong dialog, "Tới khi tôi bấm Tiếp tục" luôn là lựa chọn **đầu tiên và mặc
+định** — đừng đổi thứ tự cho giống AutoCall.
+
+**BE thực thi bằng** tick `AUTO_RESUME` (không thêm scheduler quét định kỳ). Phiên dừng vô thời hạn
+thì **tuyệt đối không tự chạy lại** — có test riêng canh bất biến này.
 
 ---
 
