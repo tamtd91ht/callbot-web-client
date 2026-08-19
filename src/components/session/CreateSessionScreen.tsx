@@ -29,7 +29,7 @@ import { SessionDataTable } from './SessionDataTable';
 import { VariablePriorityChips } from './VariablePriorityChips';
 import { ConfirmCreateDialog, type ConfirmCreateSummary } from './ConfirmCreateDialog';
 import { ScriptDetailDrawer } from './ScriptDetailDrawer';
-import { CUSTOMER_QUOTA, PURPOSES, SCRIPTS, VARIABLE_SOURCES } from './catalogs';
+import { PURPOSES, SCRIPTS, VARIABLE_SOURCES } from './catalogs';
 import { PurposeField, ScriptField, SipNumbersField, VoiceField, scriptLabel } from './CatalogFields';
 import { useCatalogs } from '@/lib/useCatalogs';
 import { IS_REAL } from '@/lib/sessionApi';
@@ -429,7 +429,7 @@ export function CreateSessionScreen() {
               <SourceButton icon="🪪" label="Thuộc tính khách hàng" count={countBySource('CRM')} onClick={() => openAddCustomer('crm')} />
             </div>
             <p className="mt-3 text-sm text-(--color-muted)">
-              Tổng đã nạp: <b>{activeRows.length.toLocaleString('vi-VN')}</b>/{CUSTOMER_QUOTA.toLocaleString('vi-VN')} khách hàng
+              Tổng đã nạp: <b>{activeRows.length.toLocaleString('vi-VN')}</b> khách hàng
               {session && <> · phiên nháp <code className="rounded bg-(--color-field) px-1">{session.id}</code></>}
             </p>
             {errors.rows && (
@@ -490,7 +490,7 @@ function SourceButton({ icon, label, count, onClick }: { icon: string; label: st
     <button onClick={onClick}
       className="flex items-center gap-2 rounded-lg bg-(--color-primary) px-5 py-3 text-[15px] font-semibold text-white shadow-sm transition hover:bg-(--color-primary-dark)">
       <span>{icon}</span> {label}
-      <span className="font-normal opacity-90">{count.toLocaleString('vi-VN')}/{CUSTOMER_QUOTA.toLocaleString('vi-VN')}</span>
+      <span className="font-normal opacity-90">{count.toLocaleString('vi-VN')}</span>
     </button>
   );
 }

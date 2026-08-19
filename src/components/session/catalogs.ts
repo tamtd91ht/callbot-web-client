@@ -59,8 +59,6 @@ export const VARIABLE_SOURCES = [
   { key: 'MANUAL', label: 'Giá trị nhập' },
 ];
 
-export const CUSTOMER_QUOTA = 2000;
-
 export const COUNTRY_CODE_OPTIONS = ['Không áp dụng', '+84', '84', '0084', 'Tùy chỉnh'] as const;
 export type CountryCodeOption = (typeof COUNTRY_CODE_OPTIONS)[number];
 

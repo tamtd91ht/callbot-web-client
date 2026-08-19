@@ -12,7 +12,7 @@ import type {
   ImportBatch, ImportExcelResult,
 } from '@/contracts/types';
 import { ApiError, api, get, post } from '@/lib/apiClient';
-import { sessionApi } from '@/lib/sessionApi';
+import { IS_REAL, sessionApi } from '@/lib/sessionApi';
 import { useCatalogs } from '@/lib/useCatalogs';
 import { Button, Drawer, Tabs, inputClass } from '../ui';
 import { COUNTRY_CODE_OPTIONS, type CountryCodeOption, applyCountryCode } from './catalogs';
@@ -33,6 +33,7 @@ export function AddCustomerDrawer({
   const [tab, setTab] = useState<string>(initialTab);
   useEffect(() => { if (open) setTab(initialTab); }, [open, initialTab]);
   const running = sessionStatus === 'RUNNING' || sessionStatus === 'PAUSED';
+  const paused = sessionStatus === 'PAUSED';
   const [appendMode, setAppendMode] = useState<AppendMode>('RUN_AFTER');
 
   return (
@@ -45,11 +46,11 @@ export function AddCustomerDrawer({
         ]} />
         <div className="min-h-0 flex-1 overflow-y-auto">
           {tab === 'manual' && <ManualTab ensureSessionId={ensureSessionId} onAdded={onAdded} onClose={onClose}
-            running={running} appendMode={appendMode} setAppendMode={setAppendMode} />}
+            running={running} paused={paused} appendMode={appendMode} setAppendMode={setAppendMode} />}
           {tab === 'excel' && <ExcelTab ensureSessionId={ensureSessionId} onAdded={onAdded} onClose={onClose}
-            running={running} appendMode={appendMode} setAppendMode={setAppendMode} />}
+            running={running} paused={paused} appendMode={appendMode} setAppendMode={setAppendMode} />}
           {tab === 'crm' && <CrmTab ensureSessionId={ensureSessionId} onAdded={onAdded} onClose={onClose}
-            running={running} appendMode={appendMode} setAppendMode={setAppendMode} />}
+            running={running} paused={paused} appendMode={appendMode} setAppendMode={setAppendMode} />}
         </div>
       </div>
     </Drawer>
@@ -61,27 +62,46 @@ interface TabProps {
   onAdded: (r: { inserted: number; duplicated: number; invalid: number }) => void;
   onClose: () => void;
   running: boolean;
+  /** PAUSED — "chạy ngay" chỉ xếp đầu hàng, chưa gọi được cho tới khi resume. */
+  paused: boolean;
   appendMode: AppendMode;
   setAppendMode: (m: AppendMode) => void;
 }
 
-function AppendModePicker({ running, appendMode, setAppendMode }: Pick<TabProps, 'running' | 'appendMode' | 'setAppendMode'>) {
+/**
+ * Chọn thứ tự gọi cho data nạp thêm.
+ *
+ * ⚠️ PHẢI phân biệt RUNNING và PAUSED. Phiên PAUSED thì KHÔNG có tick nào chạy, nên "Chạy ngay"
+ * không gọi ngay được — data chỉ xếp đầu hàng đợi và nằm im tới khi bấm Tiếp tục. Nhãn cũ dùng
+ * chung cho cả hai trạng thái khiến người dùng nạp xong rồi ngồi chờ cuộc gọi không bao giờ tới.
+ * Kịch bản này rất hay gặp: tạm dừng phiên → nạp thêm data → tưởng xong.
+ */
+function AppendModePicker({ running, paused, appendMode, setAppendMode }:
+  Pick<TabProps, 'running' | 'paused' | 'appendMode' | 'setAppendMode'>) {
   if (!running) return null;
   return (
-    <div className="flex items-center gap-2 text-sm">
-      <span className="text-(--color-muted)">Phiên đang chạy:</span>
-      <select className="rounded-lg border border-(--color-line) px-2 py-1.5 text-sm" value={appendMode}
-        onChange={(e) => setAppendMode(e.target.value as AppendMode)}>
-        <option value="RUN_AFTER">Chạy sau khi data cũ xong</option>
-        <option value="RUN_NOW">Chạy ngay (chen hàng)</option>
-      </select>
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-sm">
+        <span className="text-(--color-muted)">{paused ? 'Phiên đang tạm dừng:' : 'Phiên đang chạy:'}</span>
+        <select className="rounded-lg border border-(--color-line) px-2 py-1.5 text-sm" value={appendMode}
+          onChange={(e) => setAppendMode(e.target.value as AppendMode)}>
+          <option value="RUN_AFTER">Chạy sau khi data cũ xong</option>
+          <option value="RUN_NOW">{paused ? 'Ưu tiên gọi trước (khi phiên chạy lại)' : 'Chạy ngay (chen hàng)'}</option>
+        </select>
+      </div>
+      {paused && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+          Phiên đang tạm dừng nên <b>chưa gọi ngay được</b>. Data sẽ vào hàng đợi và bắt đầu gọi khi
+          bạn bấm <b>“Tiếp tục”</b>.
+        </p>
+      )}
     </div>
   );
 }
 
 /* ============================== TAB THỦ CÔNG ============================== */
 
-function ManualTab({ ensureSessionId, onAdded, onClose, running, appendMode, setAppendMode }: TabProps) {
+function ManualTab({ ensureSessionId, onAdded, onClose, running, paused, appendMode, setAppendMode }: TabProps) {
   const catalogs = useCatalogs();
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<ContactSuggestion[]>([]);
@@ -234,7 +254,7 @@ function ManualTab({ ensureSessionId, onAdded, onClose, running, appendMode, set
               )}
             </>
           )}
-          <span className="ml-auto"><AppendModePicker running={running} appendMode={appendMode} setAppendMode={setAppendMode} /></span>
+          <span className="ml-auto"><AppendModePicker running={running} paused={paused} appendMode={appendMode} setAppendMode={setAppendMode} /></span>
         </div>
         <div className="flex gap-3">
           <Button variant="primary" disabled={busy || staged.length === 0} onClick={submit}>
@@ -252,7 +272,7 @@ function ManualTab({ ensureSessionId, onAdded, onClose, running, appendMode, set
 
 const CSV_TEMPLATE = encodeURI('data:text/csv;charset=utf-8,phone_number,full_name,debt_amount\n0987000001,Nguyen Van A,1500000\n0912000002,Tran Thi B,2400000\n');
 
-function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setAppendMode }: TabProps) {
+function ExcelTab({ ensureSessionId, onAdded, onClose, running, paused, appendMode, setAppendMode }: TabProps) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ImportExcelResult | null>(null);
@@ -323,7 +343,7 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
       </p>
       <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-(--color-line) bg-(--color-field) py-10 hover:border-(--color-primary)">
         <span className="text-3xl">📄</span>
-        <span className="text-sm font-medium">{file ? file.name : 'Chọn file .xlsx / .csv (≤ 5MB — giới hạn demo)'}</span>
+        <span className="text-sm font-medium">{file ? file.name : (IS_REAL ? 'Chọn file .xlsx (≤ 20MB, tối đa 100.000 dòng)' : 'Chọn file .xlsx / .csv (≤ 5MB — giới hạn demo)')}</span>
         <input type="file" accept=".xlsx,.xls,.csv" className="hidden"
           onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }} />
       </label>
@@ -365,7 +385,7 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
           {busy ? 'Đang tải lên…' : pendingBatch ? 'Server đang xử lý…' : 'Tải lên & thêm vào phiên'}
         </Button>
         <Button onClick={onClose}>Đóng</Button>
-        <AppendModePicker running={running} appendMode={appendMode} setAppendMode={setAppendMode} />
+        <AppendModePicker running={running} paused={paused} appendMode={appendMode} setAppendMode={setAppendMode} />
         {error && <span className="text-sm text-(--color-danger)">{error}</span>}
       </div>
     </div>
@@ -374,7 +394,7 @@ function ExcelTab({ ensureSessionId, onAdded, onClose, running, appendMode, setA
 
 /* ====================== TAB THUỘC TÍNH KHÁCH HÀNG (CRM) ====================== */
 
-function CrmTab({ ensureSessionId, onAdded, onClose, running, appendMode, setAppendMode }: TabProps) {
+function CrmTab({ ensureSessionId, onAdded, onClose, running, paused, appendMode, setAppendMode }: TabProps) {
   const catalogs = useCatalogs();
   const [tagIds, setTagIds] = useState<string[]>([]);
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
@@ -500,7 +520,7 @@ function CrmTab({ ensureSessionId, onAdded, onClose, running, appendMode, setApp
           Nạp {count ? count.toLocaleString('vi-VN') : ''} khách hàng vào phiên
         </Button>
         <Button onClick={onClose}>Đóng</Button>
-        <AppendModePicker running={running} appendMode={appendMode} setAppendMode={setAppendMode} />
+        <AppendModePicker running={running} paused={paused} appendMode={appendMode} setAppendMode={setAppendMode} />
         {error && <span className="text-sm text-(--color-danger)">{error}</span>}
       </div>
     </div>
