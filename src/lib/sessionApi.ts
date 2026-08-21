@@ -256,9 +256,13 @@ export const sessionApi = {
   /**
    * Một trang data theo cursor — đường CHÍNH để xem data của phiên.
    *
-   * [Gap BE #3 — đã sửa 2026-08-19] Trước đây `/data/search` bỏ qua `searchAfter` nên FE buộc phải
+   * [Gap BE #3 — đã sửa 2026-08-19] Trước đây endpoint cursor bỏ qua `searchAfter` nên FE buộc phải
    * xin một lô 200 dòng rồi phân trang phía client: phiên quá 200 dòng là không xem hết được, mà
    * phiên gộp data hàng ngày thì vượt 200 sau vài ngày. Nay BE đọc cursor từ body.
+   *
+   * [BE đổi tên 2026-08-21] Bản cursor là `/data/search-after` (trước là `/data/search`); path
+   * `/data/search` giờ là bản page/size (Paginated) — gọi nhầm path cũ kèm `searchAfter` sẽ bị
+   * bỏ qua im lặng và luôn nhận trang đầu.
    *
    * ⚠️ Cursor-only: chỉ đi tiến tuần tự, không nhảy tới trang bất kỳ (ES chặn from/size sâu).
    */
@@ -304,7 +308,7 @@ export const sessionApi = {
     if (opts.sources?.length) body.sources = opts.sources;
     if (opts.keyword) body.keyword = opts.keyword;
     if (opts.excludeRemoved) body.excludeRemoved = true;
-    const page = await cs<BeDataPage>('/data/search', body);
+    const page = await cs<BeDataPage>('/data/search-after', body);
     return {
       rows: (page.rows ?? []).map((r) => mapClientRow(r, id)),
       total: page.total ?? 0,
@@ -321,7 +325,7 @@ export const sessionApi = {
       });
       return (page.items ?? []).map((r) => mapOldRecord(r, id));
     }
-    const page = await cs<BeDataPage>('/data/search', { id, size: ROW_FETCH_LIMIT });
+    const page = await cs<BeDataPage>('/data/search-after', { id, size: ROW_FETCH_LIMIT });
     return (page.rows ?? []).map((r) => mapClientRow(r, id));
   },
 
@@ -432,7 +436,8 @@ export const sessionApi = {
    */
   async customerReport(query: CustomerReportQuery): Promise<CustomerReportPage> {
     requireRealMode('Báo cáo khách hàng');
-    const raw = await cs<CustomerReportPageRaw>('/report/customer/list', query);
+    // BE đổi tên 2026-08-21: bản cursor là /report/customer/search-after (trước là .../list).
+    const raw = await cs<CustomerReportPageRaw>('/report/customer/search-after', query);
     // BE trả khuôn phân trang chuẩn của hệ (Paginated) — field snake_case: items/total_items/...
     // Quy về camelCase ngay tại đây để UI không phải biết chuyện đó.
     // BE bỏ field null (@JsonInclude NON_NULL) → items/nextCursor có thể VẮNG MẶT chứ không phải null.
