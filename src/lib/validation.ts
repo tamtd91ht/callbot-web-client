@@ -9,6 +9,7 @@
  * người dùng đọc "Cấu hình phiên không hợp lệ" thì không biết sai field nào.
  */
 import type { RetryConfig, SipNumber, TimeSlot } from '@/contracts/types';
+import { effectiveRetryConditions } from '@/lib/retryLabels';
 
 /** Bound đồng bộ với ClientSessionConfigValidator phía BE — đổi BE thì đổi ở đây. */
 export const LIMITS = {
@@ -151,25 +152,46 @@ export function validateDistribution(distribution: ValidatableForm['distribution
     return 'Có hai khung giờ trùng nhau trong cùng một ngày — gộp lại cho rõ ràng';
   }
 
-  // Bám đúng RetryConfig.firstInvalidReason() của BE: trigger rỗng = không cấu hình gọi lại
-  // (hợp lệ); delaySeconds chỉ bị đòi khi maxRetry > 0; actionCodes bắt buộc với MỌI trigger
-  // (bản cũ chỉ đòi với BOT_ACTION) — nhưng chỉ khi maxRetry > 0, vì maxRetry = 0 là tắt gọi lại
-  // có chủ đích, lúc đó hỏi "gọi lại khi nào" là vô nghĩa và sẽ chặn oan.
-  if (retryConfig?.trigger) {
-    const { actionCodes, maxRetry, delaySeconds } = retryConfig;
-    if (!Number.isFinite(maxRetry) || maxRetry < LIMITS.maxRetry.min || maxRetry > LIMITS.maxRetry.max) {
-      return `Số lần gọi lại tối đa phải trong ${LIMITS.maxRetry.min}–${LIMITS.maxRetry.max}`;
-    }
-    if (maxRetry > 0 && (!Number.isFinite(delaySeconds) || delaySeconds < LIMITS.delaySeconds.min)) {
-      return `Thời gian chờ gọi lại tối thiểu ${LIMITS.delaySeconds.min} giây`;
-    }
-    if (maxRetry > 0 && (actionCodes?.length ?? 0) === 0) {
-      return 'Phải chọn ít nhất 1 điều kiện gọi lại';
+  // Bám đúng RetryConfig.firstInvalidReason() của BE. [2026-08-21] Nhiều điều kiện (OR):
+  // đọc qua effectiveRetryConditions để phủ cả dạng mới conditions[] lẫn dạng cũ trigger/actionCodes;
+  // delaySeconds chỉ bị đòi khi maxRetry > 0; codes bắt buộc với TỪNG điều kiện — nhưng chỉ khi
+  // maxRetry > 0, vì maxRetry = 0 là tắt gọi lại có chủ đích, lúc đó hỏi "gọi lại khi nào" là
+  // vô nghĩa và sẽ chặn oan.
+  if (retryConfig) {
+    const conditions = effectiveRetryConditions(retryConfig);
+    if (conditions.length > 0) {
+      const { maxRetry, delaySeconds } = retryConfig;
+      if (!Number.isFinite(maxRetry) || maxRetry < LIMITS.maxRetry.min || maxRetry > LIMITS.maxRetry.max) {
+        return `Số lần gọi lại tối đa phải trong ${LIMITS.maxRetry.min}–${LIMITS.maxRetry.max}`;
+      }
+      if (maxRetry > 0 && (!Number.isFinite(delaySeconds) || delaySeconds < LIMITS.delaySeconds.min)) {
+        return `Thời gian chờ gọi lại tối thiểu ${LIMITS.delaySeconds.min} giây`;
+      }
+      // BE còn chặn trùng trigger giữa các điều kiện — UI checkbox không tạo ra được ca đó,
+      // nhưng vẫn kiểm để draft hỏng (import/copy) không lọt tới BE rồi mới đỏ.
+      const seen = new Set<string>();
+      for (const condition of conditions) {
+        if (seen.has(condition.trigger)) {
+          return 'Mỗi nhóm điều kiện chỉ được xuất hiện một lần — gộp các lựa chọn vào cùng nhóm';
+        }
+        seen.add(condition.trigger);
+        if (maxRetry > 0 && (condition.actionCodes?.length ?? 0) === 0) {
+          return `Nhóm "${RETRY_TRIGGER_NAMES[condition.trigger] ?? condition.trigger}" chưa chọn điều kiện nào`;
+        }
+      }
     }
   }
 
   return null;
 }
+
+/** Tên nhóm điều kiện cho message lỗi — khớp nhãn trên DistributionModal. */
+const RETRY_TRIGGER_NAMES: Record<string, string> = {
+  CALL_STATUS: 'Theo trạng thái cuộc gọi',
+  CALL_ATTRIBUTE: 'Theo kết quả cuộc gọi',
+  CONTACT_STATUS: 'Theo trạng thái khách hàng',
+  CONTACT_ATTRIBUTE: 'Theo thuộc tính khách hàng',
+};
 
 /** Hai khung giờ chồng nhau và có ít nhất 1 ngày chung — AutoCall không kiểm, ta kiểm thêm. */
 function overlappingSlots(timeSlots: TimeSlot[]): boolean {

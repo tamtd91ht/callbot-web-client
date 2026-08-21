@@ -1,8 +1,8 @@
 {
   "_comment": "Mốc đồng bộ với BE callbot-service — cập nhật bởi /sync-be. workingTreeSha256 = SHA256 của `git diff` (BE có nhiều việc chưa commit nên phải so cả working tree; e3b0c442... = working tree sạch).",
   "beRepo": "cloud-vihat-saas-omicrm-callbot-service",
-  "beHead": "78d39b28db3a057496e7fb880b0b20818d3ebc8d",
+  "beHead": "2fbf32dededa0deb04b620285a77478402ec1038",
   "workingTreeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "syncedAtLocal": "2026-08-21T14:10:00",
-  "lastPorted": "BREAKING doi ten endpoint 2026-08-21 (BE commit 78d39b2): /data/search->/data/search-after (cursor), /data/search-paged->/data/search (page/size), /report/customer/list->/report/customer/search-after; /report/customer/search (page/size) giu nguyen, khong alias. Port CA HAI ban copy (callbot-web-client + callbot-session-web): sessionApi.ts doi 3 cho goi moi ban, build xanh ca hai. LUU Y: marker truoc do stale tu 2026-08-10 (7be8cda) - cac thay doi giua hai moc (cursor paging gap #3, withCallProgress, pauseMinutes, retry v4, bao cao KH/TAT) da duoc port thu cong o cac phien truoc."
+  "syncedAtLocal": "2026-08-21T17:45:00",
+  "lastPorted": "Retry NHIEU dieu kien (OR) 2026-08-21: RetryConfig.conditions[] ({trigger, actionCodes[]}), mot dieu kien khop la goi lai; maxRetry/delaySeconds chung; cam dung lan voi dang cu trigger/actionCodes; khong trung trigger. FE: types RetryCondition, effectiveRetryConditions() trong retryLabels (diem doc duy nhat), DistributionModal radio->checkbox moi nhom giu codes rieng, validation + mockGateway bam firstInvalidReason moi, simulator OR. Dang cu van duoc BE nhan (session luu truoc ngay doi). BE con uncommitted (xem beHead + wtSha)."
 }

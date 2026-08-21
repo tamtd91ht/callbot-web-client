@@ -3,7 +3,18 @@
  * panel cấu hình). Gom một chỗ vì trước đây ba nơi cùng ghi cứng "khi không nghe máy", nên khi
  * điều kiện gọi lại trở thành thứ CHỌN ĐƯỢC thì cả ba đều mô tả sai cấu hình thật.
  */
-import type { RetryConfig } from '@/contracts/types';
+import type { RetryCondition, RetryConfig } from '@/contracts/types';
+
+/**
+ * [2026-08-21] Quy CẢ HAI dạng cấu hình về một list điều kiện — bản chiếu của
+ * `RetryConfig.effectiveConditions()` phía BE. Mọi chỗ ĐỌC cấu hình (hiển thị, validate, mock)
+ * phải đi qua đây, đọc thẳng `retry.trigger`/`retry.conditions` là sẽ quên một dạng.
+ */
+export function effectiveRetryConditions(retry: RetryConfig): RetryCondition[] {
+  if (retry.conditions && retry.conditions.length > 0) return retry.conditions;
+  if (retry.trigger) return [{ trigger: retry.trigger, actionCodes: retry.actionCodes }];
+  return [];
+}
 
 /** Mã của trigger CALL_STATUS — mức TỔNG (nghe máy / không nghe máy). */
 const CODE_LABELS: Record<string, string> = {
@@ -34,6 +45,10 @@ const ATTRIBUTE_LABELS: Record<string, string> = {
 /**
  * Ví dụ: "Khi không nghe máy". Mã lạ (BE mở thêm sau) hiện nguyên văn thay vì bị nuốt mất.
  *
+ * [2026-08-21] Nhiều điều kiện (OR): mô tả từng điều kiện rồi nối bằng "HOẶC" — đúng ngữ nghĩa
+ * thực thi (một điều kiện khớp là gọi lại). Vẫn nhận dạng cũ 1 điều kiện qua
+ * {@link effectiveRetryConditions}.
+ *
  * @param statusNames tra mã trạng thái khách ("1", "1-1") → tên. Không truyền thì mô tả chung chung
  *   thay vì phơi mã thô — "1-1" với người dùng là vô nghĩa.
  */
@@ -41,18 +56,26 @@ export function describeRetryCondition(
   retry: RetryConfig,
   statusNames?: Map<string, string>,
 ): string {
-  if (retry.trigger === 'CONTACT_ATTRIBUTE') return 'Theo thuộc tính khách hàng';
-  const codes = retry.actionCodes ?? [];
-  if (retry.trigger === 'CONTACT_STATUS') {
-    if (codes.length === 0) return 'Chưa chọn trạng thái';
+  const conditions = effectiveRetryConditions(retry);
+  if (conditions.length === 0) return 'Chưa chọn điều kiện';
+  const text = conditions.map((c) => describeOne(c, statusNames)).join(' HOẶC ');
+  // Viết hoa chữ đầu — caller đang ghép "<mô tả> — tối đa N lần" nên chuỗi phải tự đứng được.
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function describeOne(condition: RetryCondition, statusNames?: Map<string, string>): string {
+  if (condition.trigger === 'CONTACT_ATTRIBUTE') return 'theo thuộc tính khách hàng';
+  const codes = condition.actionCodes ?? [];
+  if (condition.trigger === 'CONTACT_STATUS') {
+    if (codes.length === 0) return 'chưa chọn trạng thái';
     const named = codes.map((c) => statusNames?.get(c.trim())).filter((n): n is string => !!n);
     // Chỉ hiện tên khi tra được ĐỦ: thiếu một cái mà vẫn liệt kê là mô tả sai cấu hình thật.
     return named.length === codes.length
-      ? `Khi khách ở trạng thái ${named.join(', ')}`
-      : `Theo trạng thái khách hàng (${codes.length} trạng thái)`;
+      ? `khi khách ở trạng thái ${named.join(', ')}`
+      : `theo trạng thái khách hàng (${codes.length} trạng thái)`;
   }
-  if (codes.length === 0) return 'Chưa chọn điều kiện';
+  if (codes.length === 0) return 'chưa chọn điều kiện';
   // Mỗi trigger tra ĐÚNG bảng của nó — xem cảnh báo ở ATTRIBUTE_LABELS.
-  const labels = retry.trigger === 'CALL_ATTRIBUTE' ? ATTRIBUTE_LABELS : CODE_LABELS;
-  return `Khi ${codes.map((c) => labels[c.trim().toUpperCase()] ?? c).join(', ')}`;
+  const labels = condition.trigger === 'CALL_ATTRIBUTE' ? ATTRIBUTE_LABELS : CODE_LABELS;
+  return `khi ${codes.map((c) => labels[c.trim().toUpperCase()] ?? c).join(', ')}`;
 }

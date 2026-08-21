@@ -5,6 +5,7 @@
  * Tỉ lệ kết quả: 65% nghe máy, 30% không nghe (retry nếu cấu hình), 5% lỗi.
  */
 import type { SessionCounters } from '@/contracts/types';
+import { effectiveRetryConditions } from '@/lib/retryLabels';
 import { emit, type MockSessionState } from './store';
 
 const TICK_MS = Number(process.env.MOCK_TICK_MS || 2000);
@@ -54,12 +55,14 @@ function tick(state: MockSessionState): void {
         // lệ đo trên CDR production tháng 8/2026 để mock không cho cảm giác sai về mức độ ảnh hưởng:
         // REJECTED (nhà mạng chặn) chiếm gần nửa, không phải một ca hiếm.
         const attributeCode = pickAttributeCode();
-        const matchesTrigger = retry && (
-          (retry.trigger === 'CALL_STATUS'
-            && (retry.actionCodes ?? []).some((c) => c.trim().toUpperCase() === 'NO_ANSWER'))
-          || (retry.trigger === 'CALL_ATTRIBUTE'
-            && (retry.actionCodes ?? []).some((c) => c.trim().toUpperCase() === attributeCode))
-        );
+        // [2026-08-21] Nhiều điều kiện, ngữ nghĩa HOẶC — đúng RetryDecider: một điều kiện khớp là
+        // gọi lại. effectiveRetryConditions phủ cả dạng cũ (session mock tạo trước ngày đổi).
+        const matchesTrigger = !!retry && effectiveRetryConditions(retry).some((condition) => (
+          (condition.trigger === 'CALL_STATUS'
+            && (condition.actionCodes ?? []).some((c) => c.trim().toUpperCase() === 'NO_ANSWER'))
+          || (condition.trigger === 'CALL_ATTRIBUTE'
+            && (condition.actionCodes ?? []).some((c) => c.trim().toUpperCase() === attributeCode))
+        ));
         if (retry && matchesTrigger
           && retried < retry.maxRetry) {
           // clone-retry: quay lại hàng đợi, giữ priority (mô phỏng appendRecordsRetryCall)

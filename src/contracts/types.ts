@@ -38,8 +38,21 @@ export interface SipNumber {
   isRoutingNumber?: boolean;
 }
 
-export interface RetryConfig {
+/** [2026-08-21] Một điều kiện kích hoạt gọi lại: trigger + các mã ứng với trigger đó. */
+export interface RetryCondition {
   trigger: RetryTrigger;
+  actionCodes?: string[];
+}
+
+export interface RetryConfig {
+  /**
+   * [2026-08-21] Dạng MỚI — NHIỀU điều kiện, ngữ nghĩa HOẶC: một điều kiện khớp là gọi lại.
+   * FE luôn tạo dạng này. Không trùng trigger giữa các điều kiện; không gửi cùng cặp cũ bên dưới.
+   */
+  conditions?: RetryCondition[];
+  /** @deprecated dạng CŨ 1 điều kiện — chỉ còn đọc từ session đã lưu trước 2026-08-21 / map luồng cũ. */
+  trigger?: RetryTrigger;
+  /** @deprecated đi cùng `trigger` dạng cũ. */
   actionCodes?: string[];
   maxRetry: number;
   delaySeconds: number;

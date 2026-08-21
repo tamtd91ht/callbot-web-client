@@ -10,6 +10,7 @@ import type {
   SessionReport, UpdateSessionRequest,
 } from '@/contracts/types';
 import type { SessionEvent } from '@/contracts/events';
+import { effectiveRetryConditions } from '@/lib/retryLabels';
 import { GatewayError, type CallbotGateway, type SessionAction } from '../gateway';
 import { db, emit, nextId, type MockSessionState } from './store';
 import { computeCounters, emitLifecycle, emitStats, startTicking, stopTicking } from './simulator';
@@ -197,19 +198,47 @@ export const mockGateway: CallbotGateway = {
         if (s.maxCallTimeSeconds != null && (s.maxCallTimeSeconds < 30 || s.maxCallTimeSeconds > 3600)) {
           throw new GatewayError('CS_INVALID_CONFIG', 'maxCallTimeSeconds must be in [30,3600]');
         }
-        // Bám RetryConfig.firstInvalidReason(): trigger rỗng = không cấu hình (hợp lệ),
-        // maxRetry = 0 là tắt có chủ đích, delaySeconds chỉ bị đòi khi maxRetry > 0.
-        if (s.retryConfig?.trigger) {
-          const { trigger, actionCodes, maxRetry, delaySeconds } = s.retryConfig;
-          if (maxRetry == null || maxRetry < 0 || maxRetry > 10) {
-            throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.maxRetry must be in [0,10]');
+        // Bám RetryConfig.firstInvalidReason(). [2026-08-21] Nhiều điều kiện (OR): nhận CẢ dạng
+        // mới conditions[] lẫn dạng cũ trigger/actionCodes, cấm dùng lẫn; không điều kiện nào =
+        // không cấu hình (hợp lệ); maxRetry = 0 là tắt có chủ đích, delaySeconds chỉ đòi khi > 0.
+        if (s.retryConfig) {
+          const retry = s.retryConfig;
+          const legacyForm = !!retry.trigger;
+          const multiForm = (retry.conditions?.length ?? 0) > 0;
+          if (legacyForm && multiForm) {
+            throw new GatewayError('CS_INVALID_CONFIG',
+              'retryConfig: use either conditions[] or legacy trigger/actionCodes, not both');
           }
-          if (maxRetry > 0 && (delaySeconds == null || delaySeconds < 30)) {
-            throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.delaySeconds must be >= 30');
+          const conditions = effectiveRetryConditions(retry);
+          const present = legacyForm || multiForm
+            || retry.maxRetry != null || (retry.actionCodes?.length ?? 0) > 0;
+          if (present && conditions.length === 0) {
+            throw new GatewayError('CS_INVALID_CONFIG',
+              'retryConfig.conditions must not be empty when retryConfig is present');
           }
-          // actionCodes bắt buộc với MỌI trigger (BE đổi 2026-08-10), nhưng chỉ khi maxRetry > 0.
-          if (maxRetry > 0 && (actionCodes?.length ?? 0) === 0) {
-            throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.actionCodes must not be empty');
+          if (conditions.length > 0) {
+            const { maxRetry, delaySeconds } = retry;
+            if (maxRetry == null || maxRetry < 0 || maxRetry > 10) {
+              throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.maxRetry must be in [0,10]');
+            }
+            if (maxRetry > 0 && (delaySeconds == null || delaySeconds < 30)) {
+              throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.delaySeconds must be >= 30');
+            }
+            const seen = new Set<string>();
+            for (const condition of conditions) {
+              if (!condition.trigger) {
+                throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.conditions[].trigger must not be null');
+              }
+              if (seen.has(condition.trigger)) {
+                throw new GatewayError('CS_INVALID_CONFIG',
+                  `retryConfig.conditions has duplicated trigger ${condition.trigger}`);
+              }
+              seen.add(condition.trigger);
+              // codes bắt buộc với TỪNG điều kiện, nhưng chỉ khi maxRetry > 0.
+              if (maxRetry > 0 && (condition.actionCodes?.length ?? 0) === 0) {
+                throw new GatewayError('CS_INVALID_CONFIG', 'retryConfig.conditions[].actionCodes must not be empty');
+              }
+            }
           }
         }
         if (!state.rows.some((r) => r.rowStatus === 'STAGED')) throw new GatewayError('CS_NO_DATA', 'No STAGED data row to run');

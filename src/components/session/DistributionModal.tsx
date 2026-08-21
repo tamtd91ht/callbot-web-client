@@ -4,8 +4,9 @@
  * batchSize + batchIntervalSeconds (phân bổ), timeSlots (khung giờ), retryConfig (gọi lại).
  */
 import { useState } from 'react';
-import type { RetryConfig, RetryTrigger, TimeSlot } from '@/contracts/types';
+import type { RetryCondition, RetryConfig, RetryTrigger, TimeSlot } from '@/contracts/types';
 import type { ContactStatusOption } from '@/lib/catalogApi';
+import { effectiveRetryConditions } from '@/lib/retryLabels';
 import { LIMITS, validateDistribution } from '@/lib/validation';
 import { Button, Field, Modal, inputClass } from '../ui';
 
@@ -55,9 +56,11 @@ export function DistributionModal({
   const [draft, setDraft] = useState<DistributionValue>(value);
   const [error, setError] = useState<string | null>(null);
 
-  // đồng bộ lại khi mở
+  // đồng bộ lại khi mở. [2026-08-21] Quy retryConfig dạng CŨ (trigger/actionCodes — session lưu
+  // trước ngày đổi) về dạng conditions NGAY LÚC MỞ: UI bên dưới chỉ sửa một hình dạng duy nhất,
+  // sửa cả hai dạng song song là nguồn lệch âm thầm.
   const [wasOpen, setWasOpen] = useState(false);
-  if (open && !wasOpen) { setDraft(value); setError(null); setWasOpen(true); }
+  if (open && !wasOpen) { setDraft(migrateRetryDraft(value)); setError(null); setWasOpen(true); }
   if (!open && wasOpen) setWasOpen(false);
 
   function save() {
@@ -144,31 +147,30 @@ export function DistributionModal({
                 ...draft,
                 retryConfig: e.target.checked
                   // Mặc định đúng cái BE chạy được: kết quả cuộc gọi + không nghe máy.
-                  ? { trigger: 'CALL_STATUS', actionCodes: ['NO_ANSWER'], maxRetry: 1, delaySeconds: 60 }
+                  ? {
+                      conditions: [{ trigger: 'CALL_STATUS', actionCodes: ['NO_ANSWER'] }],
+                      maxRetry: 1, delaySeconds: 60,
+                    }
                   : null,
               })} />
             Gọi lại tự động
           </label>
           {draft.retryConfig && (
             <div className="mt-3">
-              <Field label="Điều kiện gọi lại — chỉ chọn 1 nhóm">
+              {/* [2026-08-21] NHIỀU điều kiện, ngữ nghĩa HOẶC — checkbox thay radio. Mỗi điều kiện
+                  giữ actionCodes RIÊNG (mã của CALL_STATUS, CALL_ATTRIBUTE, CONTACT_STATUS thuộc
+                  ba danh mục khác hẳn nhau; "NO_ANSWER" tồn tại ở cả hai danh mục đầu với nghĩa
+                  HẸP HƠN ở CALL_ATTRIBUTE) — bỏ chọn nhóm nào là mất codes của nhóm đó, chọn lại
+                  bắt đầu từ mặc định của nhóm. */}
+              <Field label="Điều kiện gọi lại — chọn 1 hoặc nhiều nhóm, thoả MỘT nhóm là gọi lại">
                 <div className="flex flex-col gap-2">
                   {RETRY_TRIGGERS.map(({ trigger, label, hint }) => (
                     <label key={trigger} className="flex items-start gap-2 text-sm">
-                      <input type="radio" name="retryTrigger" className="mt-0.5"
-                        checked={draft.retryConfig!.trigger === trigger}
+                      <input type="checkbox" className="mt-0.5"
+                        checked={!!conditionOf(draft.retryConfig, trigger)}
                         onChange={() => setDraft({
                           ...draft,
-                          retryConfig: {
-                            ...draft.retryConfig!,
-                            trigger,
-                            // XOÁ actionCodes khi đổi trigger: mã của CALL_STATUS ("NO_ANSWER"), của
-                            // CALL_ATTRIBUTE ("BUSY", "REJECTED"…) và của CONTACT_STATUS ("1", "1-1")
-                            // thuộc ba danh mục khác hẳn nhau. Giữ lại là gửi lên BE một cấu hình
-                            // không bao giờ khớp được gì — hoặc tệ hơn, khớp NHẦM: "NO_ANSWER" tồn
-                            // tại ở CẢ CALL_STATUS lẫn CALL_ATTRIBUTE nhưng nghĩa HẸP HƠN ở cái sau.
-                            actionCodes: [],
-                          },
+                          retryConfig: toggleTrigger(draft.retryConfig!, trigger),
                         })} />
                       <span>
                         {label}
@@ -196,22 +198,21 @@ export function DistributionModal({
               </Field>
             </div>
           )}
-          {draft.retryConfig?.trigger === 'CALL_STATUS' && draft.retryConfig.maxRetry > 0 && (
+          {conditionOf(draft.retryConfig, 'CALL_STATUS') && draft.retryConfig!.maxRetry > 0 && (
             <div className="mt-3">
-              <Field label="Gọi lại khi kết quả là">
+              <Field label="Theo trạng thái cuộc gọi — gọi lại khi kết quả là">
                 <div className="flex flex-wrap items-center gap-3">
                   {CALL_STATUS_CODES.map(({ code, label, supported }) => {
-                    const checked = (draft.retryConfig?.actionCodes ?? []).includes(code);
+                    const codes = conditionOf(draft.retryConfig, 'CALL_STATUS')?.actionCodes ?? [];
+                    const checked = codes.includes(code);
                     return (
                       <label key={code}
                         className={`flex items-center gap-1.5 text-sm ${supported ? '' : 'text-(--color-muted)'}`}>
                         <input type="checkbox" checked={checked} disabled={!supported}
                           onChange={() => setDraft({
                             ...draft,
-                            retryConfig: {
-                              ...draft.retryConfig!,
-                              actionCodes: toggleCode(draft.retryConfig?.actionCodes, code),
-                            },
+                            retryConfig: setConditionCodes(draft.retryConfig!, 'CALL_STATUS',
+                              toggleCode(codes, code)),
                           })} />
                         {label}
                       </label>
@@ -221,21 +222,20 @@ export function DistributionModal({
               </Field>
             </div>
           )}
-          {draft.retryConfig?.trigger === 'CALL_ATTRIBUTE' && draft.retryConfig.maxRetry > 0 && (
+          {conditionOf(draft.retryConfig, 'CALL_ATTRIBUTE') && draft.retryConfig!.maxRetry > 0 && (
             <div className="mt-3">
-              <Field label="Gọi lại khi kết quả thuộc nhóm">
+              <Field label="Theo kết quả cuộc gọi — gọi lại khi kết quả thuộc nhóm">
                 <div className="flex flex-wrap items-center gap-3">
                   {CALL_ATTRIBUTE_CODES.map(({ code, label, share, warn }) => {
-                    const checked = (draft.retryConfig?.actionCodes ?? []).includes(code);
+                    const codes = conditionOf(draft.retryConfig, 'CALL_ATTRIBUTE')?.actionCodes ?? [];
+                    const checked = codes.includes(code);
                     return (
                       <label key={code} className="flex items-center gap-1.5 text-sm">
                         <input type="checkbox" checked={checked}
                           onChange={() => setDraft({
                             ...draft,
-                            retryConfig: {
-                              ...draft.retryConfig!,
-                              actionCodes: toggleAttributeCode(draft.retryConfig?.actionCodes, code),
-                            },
+                            retryConfig: setConditionCodes(draft.retryConfig!, 'CALL_ATTRIBUTE',
+                              toggleAttributeCode(codes, code)),
                           })} />
                         {label}
                         <span className={`text-xs ${warn ? 'text-(--color-danger)' : 'text-(--color-muted)'}`}>
@@ -258,9 +258,9 @@ export function DistributionModal({
               </p>
             </div>
           )}
-          {draft.retryConfig?.trigger === 'CONTACT_STATUS' && draft.retryConfig.maxRetry > 0 && (
+          {conditionOf(draft.retryConfig, 'CONTACT_STATUS') && draft.retryConfig!.maxRetry > 0 && (
             <div className="mt-3">
-              <Field label="Gọi lại khi khách ở trạng thái">
+              <Field label="Theo trạng thái khách hàng — gọi lại khi khách ở trạng thái">
                 {contactStatuses.length === 0 ? (
                   <p className="text-xs text-(--color-danger)">
                     Chưa lấy được danh mục trạng thái khách hàng. Kiểm tra token, hoặc tenant chưa
@@ -269,17 +269,16 @@ export function DistributionModal({
                 ) : (
                   <div className="max-h-44 overflow-y-auto rounded-(--radius-field) border border-(--color-line) p-2">
                     {contactStatuses.map(({ code, name, isSecondLevel }) => {
-                      const checked = (draft.retryConfig?.actionCodes ?? []).includes(code);
+                      const codes = conditionOf(draft.retryConfig, 'CONTACT_STATUS')?.actionCodes ?? [];
+                      const checked = codes.includes(code);
                       return (
                         <label key={code}
                           className={`flex items-center gap-2 py-1 text-sm ${isSecondLevel ? 'pl-5' : 'font-medium'}`}>
                           <input type="checkbox" checked={checked}
                             onChange={() => setDraft({
                               ...draft,
-                              retryConfig: {
-                                ...draft.retryConfig!,
-                                actionCodes: toggleValue(draft.retryConfig?.actionCodes, code),
-                              },
+                              retryConfig: setConditionCodes(draft.retryConfig!, 'CONTACT_STATUS',
+                                toggleValue(codes, code)),
                             })} />
                           {name}
                         </label>
@@ -303,9 +302,10 @@ export function DistributionModal({
               ("trạng thái khách hàng sẽ mở dần") và không được sửa khi CONTACT_STATUS chạy thật —
               hệ quả: người dùng vừa chọn xong trạng thái khách thì đọc ngay bên dưới thấy bảo chưa
               hỗ trợ, tưởng cấu hình mình vừa làm là vô nghĩa. Giới hạn nào thì nói đúng lúc đó. */}
-          {draft.retryConfig?.trigger === 'CALL_STATUS' && (
+          {conditionOf(draft.retryConfig, 'CALL_STATUS') && (
             <p className="mt-2 text-xs text-(--color-muted)">
-              Hiện backend chỉ thực thi gọi lại khi <b>không nghe máy</b>. Các kết quả khác sẽ mở dần.
+              Với nhóm <b>trạng thái cuộc gọi</b>, backend hiện chỉ thực thi gọi lại khi{' '}
+              <b>không nghe máy</b>. Các kết quả khác sẽ mở dần.
             </p>
           )}
         </div>
@@ -333,7 +333,10 @@ const CALL_STATUS_CODES: { code: string; label: string; supported: boolean }[] =
   { code: 'BUSY', label: 'Máy bận (chưa hỗ trợ)', supported: false },
 ];
 
-/** Ba nhóm điều kiện gọi lại — loại trừ nhau, đúng 3 radio trên thiết kế. */
+/**
+ * Ba nhóm điều kiện gọi lại. [2026-08-21] KHÔNG còn loại trừ nhau: chọn được nhiều nhóm, ngữ
+ * nghĩa HOẶC — thoả một nhóm là gọi lại (mỗi nhóm một `RetryCondition` trong `conditions[]`).
+ */
 const RETRY_TRIGGERS: { trigger: RetryTrigger; label: string; hint: string }[] = [
   {
     trigger: 'CALL_STATUS',
@@ -398,6 +401,55 @@ function toggleAttributeCode(actionCodes: string[] | undefined, code: string): s
 function toggleValue(values: string[] | undefined, value: string): string[] {
   const current = values ?? [];
   return current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
+}
+
+/** Điều kiện của một trigger trong draft — undefined = nhóm đó chưa được chọn. */
+function conditionOf(retry: RetryConfig | null, trigger: RetryTrigger): RetryCondition | undefined {
+  return retry?.conditions?.find((c) => c.trigger === trigger);
+}
+
+/**
+ * Bật/tắt một NHÓM điều kiện. Bật CALL_STATUS thì mặc định sẵn NO_ANSWER (mã duy nhất BE thực thi
+ * ở nhóm đó); nhóm khác bắt đầu rỗng để người dùng tự chọn. Tắt nhóm là mất codes của nhóm —
+ * cố ý, vì codes ba nhóm thuộc ba danh mục khác hẳn nhau, giữ lại chỉ để khớp nhầm.
+ */
+function toggleTrigger(retry: RetryConfig, trigger: RetryTrigger): RetryConfig {
+  const conditions = retry.conditions ?? [];
+  const exists = conditions.some((c) => c.trigger === trigger);
+  return {
+    ...retry,
+    conditions: exists
+      ? conditions.filter((c) => c.trigger !== trigger)
+      : [...conditions, { trigger, actionCodes: trigger === 'CALL_STATUS' ? ['NO_ANSWER'] : [] }],
+  };
+}
+
+/** Thay actionCodes của đúng MỘT nhóm, các nhóm khác giữ nguyên. */
+function setConditionCodes(retry: RetryConfig, trigger: RetryTrigger, actionCodes: string[]): RetryConfig {
+  return {
+    ...retry,
+    conditions: (retry.conditions ?? []).map((c) => (c.trigger === trigger ? { ...c, actionCodes } : c)),
+  };
+}
+
+/**
+ * [2026-08-21] Session lưu TRƯỚC ngày đổi mang retryConfig dạng cũ (trigger/actionCodes) — quy về
+ * dạng conditions ngay lúc mở modal để UI chỉ sửa một hình dạng. BE nhận cả hai dạng nên lưu ra
+ * dạng mới là an toàn.
+ */
+function migrateRetryDraft(value: DistributionValue): DistributionValue {
+  const retry = value.retryConfig;
+  if (!retry || (retry.conditions && retry.conditions.length > 0)) return value;
+  const conditions = effectiveRetryConditions(retry);
+  if (conditions.length === 0) return value;
+  return {
+    ...value,
+    retryConfig: {
+      conditions,
+      maxRetry: retry.maxRetry,
+      delaySeconds: retry.delaySeconds,
+    },
+  };
 }
 
 /** Bật/tắt 1 ngày. daysOfWeek chưa có (slot cũ) = đang chọn cả 7 → bắt đầu từ đủ 7 rồi bỏ ngày này. */
